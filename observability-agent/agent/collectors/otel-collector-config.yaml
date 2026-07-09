@@ -1,0 +1,53 @@
+# otel-collector-config.yaml
+dotnetDevMode: false
+extensions:
+  health_check:
+    endpoint: /health_check
+  zpages:
+    endpoint: /debug/pprof/zprof
+receivers:
+  otlp:
+    protocols:
+      grpc:
+      http:
+  prometheus:
+    endpoint: :8888
+processors:
+  batch:
+  memory_limiter:
+  resource:
+  tail_sampling:
+    decision_wait: 5s
+    initial_sampling_ratio: 1.0
+    min_sampling_ratio: 0.1
+    max_sampling_ratio: 0.5
+exporters:
+  otlp:
+    endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT}
+  prometheus:
+    endpoint: :8888
+    namespace: prometheus
+    push_interval: 10s
+    start_timeout: 5s
+service:
+  telemetry:
+    metrics:
+      address: 0.0.0.0:8888
+  extensions: [health_check, zpages]
+  receivers: [otlp, prometheus]
+  processors: [batch, memory_limiter, resource, tail_sampling]
+  exporters: [otlp]
+  pipelines:
+    metrics:
+      receivers: [otlp, prometheus]
+      processors: [batch, memory_limiter, resource, tail_sampling]
+      exporters: [otlp]
+    traces:
+      receivers: [otlp]
+      processors: [batch, memory_limiter, resource]
+      exporters: [otlp]
+    logs:
+      receivers: [otlp]
+      processors: [batch, memory_limiter, resource]
+      exporters: [otlp]
+

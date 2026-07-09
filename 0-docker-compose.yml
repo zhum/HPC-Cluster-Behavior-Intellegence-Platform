@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  telemetry_server:
+    image: open-telemetry/opentelemetry-collector:latest
+    ports:
+      - "4317:4317"  # OTLP gRPC
+      - "4318:4318"  # OTLP HTTP
+      - "8888:8888"  # Prometheus
+    volumes:
+      - ./observability-agent/agent/collectors/otel-collector-config.yaml:/etc/otel-collector-config.yaml
+      - ./observability-agent/agent/collectors/otel-collector-config.yaml:/etc/otel-collector-config.yaml
+
+  storage_server:
+    image: vectorized/redpanda:latest
+    ports:
+      - "9092:9092"  # Kafka
+      - "9094:9094"  # gRPC
+    volumes:
+      - ./redpanda-data:/var/lib/redpanda
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    depends_on:
+      - storage_server
+    volumes:
+      - ./grafana-data:/var/lib/grafana
+

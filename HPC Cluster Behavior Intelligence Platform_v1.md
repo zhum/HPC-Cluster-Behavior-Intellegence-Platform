@@ -2,7 +2,7 @@
 
 version: 1.0
 
-objective: Implement the methodology described in arXiv 2604.11965: “Understanding Large-Scale HPC System Behavior Through Cluster-Based Visual Analytics”
+objective: Implement the methodology described in [arXiv 2604.11965: “Understanding Large-Scale HPC System Behavior Through Cluster-Based Visual Analytics”](https://arxiv.org/abs/2604.11965)
 
 references:
 * arxiv:2604.11965
