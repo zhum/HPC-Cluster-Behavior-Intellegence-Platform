@@ -1,0 +1,16 @@
+[Unit]
+Description=HPC Behavior Platform - InfiniBand counter poller
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=NODE_ID=%H
+Environment=KAFKA_BROKERS=redpanda:9092
+ExecStart=/usr/bin/python3 /opt/hpc-behavior-platform/ib_poller.py
+Restart=always
+RestartSec=5
+User=telemetry
+
+[Install]
+WantedBy=multi-user.target

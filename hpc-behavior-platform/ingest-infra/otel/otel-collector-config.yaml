@@ -1,0 +1,52 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+  # node_exporter / DCGM-exporter scrape (Prometheus wire format).
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: node_exporter
+          scrape_interval: 15s
+          static_configs:
+            - targets: ["node-exporter:9100"]
+        - job_name: dcgm_exporter
+          scrape_interval: 15s
+          static_configs:
+            - targets: ["dcgm-exporter:9400"]
+
+processors:
+  batch:
+    timeout: 5s
+    send_batch_size: 8192
+  memory_limiter:
+    check_interval: 2s
+    limit_mib: 4096
+
+exporters:
+  kafka/otel_metrics:
+    brokers: ["redpanda:9092"]
+    topic: otel.metrics
+    encoding: otlp_proto
+
+  kafka/ib_metrics:
+    brokers: ["redpanda:9092"]
+    topic: ib.metrics
+    encoding: otlp_proto
+
+  logging:
+    verbosity: basic
+
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp, prometheus]
+      processors: [memory_limiter, batch]
+      exporters: [kafka/otel_metrics, logging]
+  telemetry:
+    logs:
+      level: info

@@ -1,0 +1,15 @@
+[Unit]
+Description=NVIDIA DCGM exporter (GPU util, memory, power, temp, ECC, NVLink)
+After=network-online.target nvidia-dcgm.service
+Wants=network-online.target
+Requires=nvidia-dcgm.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/dcgm-exporter --address :9400
+Restart=always
+RestartSec=5
+User=root
+
+[Install]
+WantedBy=multi-user.target

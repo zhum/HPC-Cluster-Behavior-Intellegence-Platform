@@ -1,0 +1,96 @@
+services:
+  redpanda:
+    image: redpandadata/redpanda:v24.1.11
+    command:
+      - redpanda
+      - start
+      - --smp=1
+      - --memory=1G
+      - --overprovisioned
+      - --node-id=0
+      - --check=false
+      - --kafka-addr=PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr=PLAINTEXT://redpanda:9092
+    ports:
+      - "9092:9092"
+      - "9644:9644"
+    healthcheck:
+      test: ["CMD", "rpk", "cluster", "health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redpanda-topics:
+    image: redpandadata/redpanda:v24.1.11
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    entrypoint: >
+      bash -c "
+      rpk topic create otel.metrics --brokers redpanda:9092 &&
+      rpk topic create slurm.jobs --brokers redpanda:9092 &&
+      rpk topic create ib.metrics --brokers redpanda:9092
+      "
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.3
+    environment:
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: devpass
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - ./clickhouse/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.104.0
+    command: ["--config=/etc/otel/otel-collector-config.yaml"]
+    volumes:
+      - ./otel/otel-collector-config.yaml:/etc/otel/otel-collector-config.yaml
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+    depends_on:
+      redpanda:
+        condition: service_healthy
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    ports:
+      - "3000:3000"
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: "Admin"
+      GF_INSTALL_PLUGINS: "grafana-clickhouse-datasource"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+
+  synth-loader:
+    build:
+      context: ./tools
+      dockerfile: Dockerfile
+    command: >
+      python synth_nodes.py --nodes 200 --metrics 50 --interval 15
+      --clickhouse-host clickhouse --clickhouse-port 8123
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    profiles: ["synth"]
+
+volumes:
+  clickhouse_data:

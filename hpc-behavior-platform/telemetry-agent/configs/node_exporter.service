@@ -1,0 +1,16 @@
+[Unit]
+Description=Prometheus node_exporter
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/node_exporter \
+  --collector.infiniband \
+  --web.listen-address=:9100
+Restart=always
+RestartSec=5
+User=node_exporter
+
+[Install]
+WantedBy=multi-user.target

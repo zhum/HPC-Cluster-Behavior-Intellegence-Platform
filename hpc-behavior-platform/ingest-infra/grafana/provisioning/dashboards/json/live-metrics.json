@@ -1,0 +1,48 @@
+{
+  "title": "HPC Live Metrics (Phase 1)",
+  "timezone": "utc",
+  "schemaVersion": 39,
+  "refresh": "10s",
+  "time": { "from": "now-15m", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Ingest rate (rows/min)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "ClickHouse" },
+      "targets": [
+        {
+          "rawSql": "SELECT toStartOfMinute(ts) AS time, count() AS rows FROM metrics_raw WHERE ts > now() - INTERVAL 1 HOUR GROUP BY time ORDER BY time",
+          "format": "time_series"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Active nodes (last 5 min)",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 0 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "ClickHouse" },
+      "targets": [
+        {
+          "rawSql": "SELECT uniqExact(node_id) FROM metrics_raw WHERE ts > now() - INTERVAL 5 MINUTE",
+          "format": "table"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Mean CPU utilization by node (last 15m)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "ClickHouse" },
+      "targets": [
+        {
+          "rawSql": "SELECT toStartOfMinute(ts) AS time, node_id, avg(value) AS avg_util FROM metrics_raw WHERE metric = 'cpu.utilization' AND ts > now() - INTERVAL 15 MINUTE GROUP BY time, node_id ORDER BY time",
+          "format": "time_series"
+        }
+      ]
+    }
+  ]
+}
