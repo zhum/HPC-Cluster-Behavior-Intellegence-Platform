@@ -82,3 +82,53 @@ CREATE TABLE IF NOT EXISTS node_inventory
 )
 ENGINE = ReplacingMergeTree(updated_at)
 ORDER BY node_id;
+
+-- Phase 8 item 4 (alerting, optional/beyond the paper): scheduled headless
+-- intra-pipeline runs push |z| >= threshold events here.
+CREATE TABLE IF NOT EXISTS anomalies
+(
+    id                     String,
+    detected_at            DateTime64(3),
+    cluster_id             Int32,
+    node_id                LowCardinality(String),
+    metric                 LowCardinality(String),
+    band                   LowCardinality(String),
+    z_score                Float64,
+    baseline_window_start  UInt32,
+    baseline_window_end    UInt32,
+    status                 LowCardinality(String) DEFAULT 'open',  -- 'open' | 'dismissed'
+    dismissed_at           Nullable(DateTime64(3)),
+    dismissed_by           Nullable(String),
+    dismiss_reason         Nullable(String)
+)
+ENGINE = ReplacingMergeTree
+ORDER BY (detected_at, id);
+
+-- Operator "dismiss -> suppress" feedback: a (node_id, metric, band) that
+-- has been dismissed as a false positive is suppressed from future alerts.
+CREATE TABLE IF NOT EXISTS suppression_rules
+(
+    id         String,
+    node_id    LowCardinality(String),
+    metric     LowCardinality(String),
+    band       LowCardinality(String),
+    created_at DateTime64(3),
+    created_by Nullable(String),
+    reason     Nullable(String)
+)
+ENGINE = ReplacingMergeTree
+ORDER BY (node_id, metric, band, created_at);
+
+-- Last-known-good baseline window per (cluster, metric), so the scheduler
+-- doesn't recompute (and potentially drift) the baseline from a run that
+-- itself contains an ongoing anomaly -- only updated after a clean run.
+CREATE TABLE IF NOT EXISTS baseline_state
+(
+    cluster_id   Int32,
+    metric       LowCardinality(String),
+    window_start UInt32,
+    window_end   UInt32,
+    updated_at   DateTime64(3)
+)
+ENGINE = ReplacingMergeTree
+ORDER BY (cluster_id, metric);

@@ -1,0 +1,27 @@
+[project]
+name = "alerting"
+version = "0.1.0"
+description = "Phase 8 item 4 (optional, beyond the paper): scheduled anomaly alerting + webhooks"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.26",
+    "requests>=2.31",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.5",
+    "mypy>=1.10",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["alerting*"]
