@@ -9,6 +9,7 @@ import { MetricSelectionPanel } from "./components/MetricSelectionPanel";
 import { ClusterReadingSummary } from "./components/ClusterReadingSummary";
 import { ReadingInspection } from "./components/ReadingInspection";
 import { NodeBehaviorView } from "./components/NodeBehaviorView";
+import { SavedAnalysesPanel } from "./components/SavedAnalysesPanel";
 
 function isoNoMs(d: Date) {
   return d.toISOString().replace(/\.\d+Z$/, "");
@@ -93,6 +94,9 @@ function Dashboard({ sessionId }: { sessionId: string }) {
       </Grid>
       <Grid item xs={6}>
         <NodeBehaviorView sessionId={sessionId} ready={ready} nodes={nodes} clusterLabels={clusters?.labels ?? null} />
+      </Grid>
+      <Grid item xs={3}>
+        <SavedAnalysesPanel />
       </Grid>
     </Grid>
   );

@@ -1,6 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 
-async function createSession(page: Page) {
+export async function createSession(page: Page) {
   await page.goto("/");
   // retry session creation: this suite runs against a live synth-data feed
   // (see ingest-infra/tools/synth_nodes.py), so a session created in the
@@ -18,7 +18,7 @@ async function createSession(page: Page) {
   await expect(page.locator("circle.node-point").first()).toBeVisible({ timeout: 30_000 });
 }
 
-async function lassoAllPoints(page: Page) {
+export async function lassoAllPoints(page: Page) {
   const svg = page.getByTestId("node-similarity-svg");
   const box = await svg.boundingBox();
   if (!box) throw new Error("svg not found");

@@ -132,3 +132,28 @@ CREATE TABLE IF NOT EXISTS baseline_state
 )
 ENGINE = ReplacingMergeTree
 ORDER BY (cluster_id, metric);
+
+-- Phase 8 item 3 (multi-user sessions, optional/beyond the paper): saved
+-- analyses persisted per user (baselines, lassoNodeIds, selectedMetrics,
+-- band, k, umapParams, annotations -- the full cross-view UI state from
+-- behavior-ui's Zustand store, opaque JSON here since analysis-api doesn't
+-- need to interpret it, only store/retrieve it per owning user).
+-- `deleted` is a soft-delete flag rather than a real DELETE: ClickHouse's
+-- ALTER TABLE ... DELETE is an async mutation with no guaranteed immediate
+-- visibility to a subsequent SELECT (confirmed live -- a delete followed
+-- immediately by a list refresh still showed the "deleted" row). Deleting
+-- is instead just another insert of a newer version with deleted=1,
+-- riding the same ReplacingMergeTree + FINAL read pattern already used for
+-- updates, which -is- synchronously visible.
+CREATE TABLE IF NOT EXISTS saved_analyses
+(
+    id         String,
+    user_id    LowCardinality(String),
+    name       String,
+    state_json String,
+    deleted    UInt8 DEFAULT 0,
+    created_at DateTime64(3),
+    updated_at DateTime64(3)
+)
+ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY (user_id, id);

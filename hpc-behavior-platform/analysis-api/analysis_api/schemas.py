@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
@@ -184,3 +184,25 @@ class JobsOverlayResponse(BaseModel):
     unmapped_nodes: list[str]
     cache_key: str
     timings_ms: dict[str, float]
+
+
+class SaveAnalysisRequest(BaseModel):
+    user_id: str
+    name: str
+    state: dict[str, Any]  # opaque: behavior-ui's Zustand store shape
+    analysis_id: str | None = None  # None = create new; else update (must be owned by user_id)
+
+
+class SavedAnalysisSummary(BaseModel):
+    id: str
+    user_id: str
+    name: str
+    updated_at: str
+
+
+class SavedAnalysisDetail(SavedAnalysisSummary):
+    state: dict[str, Any]
+
+
+class ListAnalysesResponse(BaseModel):
+    analyses: list[SavedAnalysisSummary]

@@ -7,6 +7,8 @@ import type {
   ExplainResponse,
   JobsOverlayResponse,
   RawSeriesResponse,
+  SavedAnalysisDetail,
+  SavedAnalysisSummary,
   SessionStatus,
   TensorRequest,
   TimeDomainResponse,
@@ -30,6 +32,15 @@ async function post<T>(path: string, body: unknown): Promise<T> {
 
 async function get<T>(path: string): Promise<T> {
   const resp = await fetch(`${BASE_URL}${path}`);
+  if (!resp.ok) {
+    const detail = await resp.text();
+    throw new Error(`${path} failed (${resp.status}): ${detail}`);
+  }
+  return resp.json() as Promise<T>;
+}
+
+async function del<T>(path: string): Promise<T> {
+  const resp = await fetch(`${BASE_URL}${path}`, { method: "DELETE" });
   if (!resp.ok) {
     const detail = await resp.text();
     throw new Error(`${path} failed (${resp.status}): ${detail}`);
@@ -102,4 +113,16 @@ export const api = {
 
   jobsOverlay: (sessionId: string, nodeIds: string[]) =>
     post<JobsOverlayResponse>("/jobs/overlay", { session_id: sessionId, node_ids: nodeIds }),
+
+  saveAnalysis: (userId: string, name: string, state: Record<string, unknown>, analysisId?: string | null) =>
+    post<SavedAnalysisSummary>("/analyses", { user_id: userId, name, state, analysis_id: analysisId ?? null }),
+
+  listAnalyses: (userId: string) =>
+    get<{ analyses: SavedAnalysisSummary[] }>(`/analyses?user_id=${encodeURIComponent(userId)}`),
+
+  getAnalysis: (analysisId: string, userId: string) =>
+    get<SavedAnalysisDetail>(`/analyses/${analysisId}?user_id=${encodeURIComponent(userId)}`),
+
+  deleteAnalysis: (analysisId: string, userId: string) =>
+    del<{ deleted: boolean }>(`/analyses/${analysisId}?user_id=${encodeURIComponent(userId)}`),
 };

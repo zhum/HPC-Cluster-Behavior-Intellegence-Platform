@@ -24,6 +24,13 @@ export interface CrossViewState {
   baselines: Record<string, [number, number]>;
   hoveredCell: HoveredCell | null;
 
+  // Phase 8 item 3: multi-user sessions / saved analyses. userId is just a
+  // free-text identifier (no auth system specified for this project) --
+  // ownership on the backend is enforced by matching this string.
+  userId: string;
+  currentAnalysisId: string | null;
+  currentAnalysisName: string;
+
   setSession: (session: string | null) => void;
   setTimeWindow: (window: [number, number] | null) => void;
   setUmapParams: (params: UmapParams) => void;
@@ -36,6 +43,24 @@ export interface CrossViewState {
   setBaseline: (metric: string, window: [number, number]) => void;
   clearBaseline: (metric: string) => void;
   setHoveredCell: (cell: HoveredCell | null) => void;
+  setUserId: (userId: string) => void;
+  setCurrentAnalysis: (id: string | null, name: string) => void;
+  applySavedState: (state: Partial<SavedCrossViewState>) => void;
+}
+
+/** The subset of CrossViewState that gets persisted/restored per saved
+ * analysis -- deliberately excludes `session` (a session is tied to a
+ * specific materialized tensor/time range, not portable across saves).
+ */
+export interface SavedCrossViewState {
+  timeWindow: [number, number] | null;
+  umapParams: UmapParams;
+  k: number;
+  selectedClusterIds: number[];
+  lassoNodeIds: string[];
+  selectedMetrics: string[];
+  band: Band;
+  baselines: Record<string, [number, number]>;
 }
 
 export const DEFAULT_UMAP_PARAMS: UmapParams = { n_neighbors: 15, min_dist: 0.1, random_state: 42 };
@@ -51,6 +76,9 @@ export const useStore = create<CrossViewState>((set) => ({
   band: "2h",
   baselines: {},
   hoveredCell: null,
+  userId: "",
+  currentAnalysisId: null,
+  currentAnalysisName: "",
 
   setSession: (session) => set({ session }),
   setTimeWindow: (timeWindow) => set({ timeWindow }),
@@ -70,4 +98,21 @@ export const useStore = create<CrossViewState>((set) => ({
       return { baselines: next };
     }),
   setHoveredCell: (hoveredCell) => set({ hoveredCell }),
+  setUserId: (userId) => set({ userId }),
+  setCurrentAnalysis: (currentAnalysisId, currentAnalysisName) => set({ currentAnalysisId, currentAnalysisName }),
+  applySavedState: (state) => set({ ...state }),
 }));
+
+/** Extracts the portable subset of the current store for saving. */
+export function extractSavedState(state: CrossViewState): SavedCrossViewState {
+  return {
+    timeWindow: state.timeWindow,
+    umapParams: state.umapParams,
+    k: state.k,
+    selectedClusterIds: state.selectedClusterIds,
+    lassoNodeIds: state.lassoNodeIds,
+    selectedMetrics: state.selectedMetrics,
+    band: state.band,
+    baselines: state.baselines,
+  };
+}

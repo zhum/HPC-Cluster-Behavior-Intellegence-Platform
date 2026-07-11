@@ -110,3 +110,14 @@ export interface JobsOverlayResponse {
   cache_key: string;
   timings_ms: Record<string, number>;
 }
+
+export interface SavedAnalysisSummary {
+  id: string;
+  user_id: string;
+  name: string;
+  updated_at: string;
+}
+
+export interface SavedAnalysisDetail extends SavedAnalysisSummary {
+  state: Record<string, unknown>;
+}

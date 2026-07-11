@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from analysis_api.cache import RedisStageCache
 from analysis_api.main import create_app
+from analysis_api.saved_analyses import SavedAnalysesStore
 from analysis_api.session import SessionStore
 
 
@@ -32,6 +33,7 @@ class FakeClickHouseClient:
         self.times = times
         self.values = values  # (N, M, T)
         self.jobs: list[tuple] = []
+        self.saved_analyses: list[dict] = []
 
     def query(self, query: str, parameters: dict):
         if "DISTINCT node_id" in query:
@@ -42,6 +44,19 @@ class FakeClickHouseClient:
             wanted = set(parameters["node_ids"])
             rows = [r for r in self.jobs if wanted & set(r[3])]
             return _QueryResult(rows)
+        if "FROM saved_analyses" in query:
+            rows = self.saved_analyses
+            if "id" in parameters:
+                rows = [r for r in rows if r["id"] == parameters["id"]]
+            if "user_id" in parameters:
+                rows = [r for r in rows if r["user_id"] == parameters["user_id"]]
+            if "deleted = 0" in query:
+                rows = [r for r in rows if r["deleted"] == 0]
+            if "SELECT id, user_id, name, updated_at " in query:
+                return _QueryResult([(r["id"], r["user_id"], r["name"], r["updated_at"]) for r in rows])
+            return _QueryResult(
+                [(r["id"], r["user_id"], r["name"], r["state_json"], r["updated_at"]) for r in rows]
+            )
 
         # load_gridded: toStartOfInterval + argMax bucketing emulation --
         # our fixture data is already exactly on-grid and deduped, so this
@@ -58,6 +73,15 @@ class FakeClickHouseClient:
                 for t_i, ts in enumerate(self.times):
                     rows.append((ts, node, metric, float(self.values[n_i, m_i, t_i])))
         return _QueryResult(rows)
+
+    def insert(self, table: str, rows: list[tuple], column_names: list[str]) -> None:
+        assert table == "saved_analyses"
+        for row in rows:
+            record = dict(zip(column_names, row))
+            # mimic ReplacingMergeTree(updated_at) + FINAL: latest insert for
+            # a given id wins, including soft-deletes (deleted=1 inserts).
+            self.saved_analyses = [a for a in self.saved_analyses if a["id"] != record["id"]]
+            self.saved_analyses.append(record)
 
 
 @pytest.fixture
@@ -96,4 +120,5 @@ def app_client(synthetic_client):
     app.state.session_store = SessionStore()
     app.state.stage_cache = RedisStageCache(fakeredis.FakeRedis())
     app.state.clickhouse_client = client
+    app.state.saved_analyses_store = SavedAnalysesStore(client)
     return TestClient(app)

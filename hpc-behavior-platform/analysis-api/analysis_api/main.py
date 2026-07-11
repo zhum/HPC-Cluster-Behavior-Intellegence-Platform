@@ -13,7 +13,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from redis import Redis
 
 from analysis_api.cache import RedisStageCache
-from analysis_api.routers import inter, intra, jobs, raw, session
+from analysis_api.routers import analyses, inter, intra, jobs, raw, session
+from analysis_api.saved_analyses import SavedAnalysesStore
 from analysis_api.session import SessionStore
 from tensor_store.loader import get_client
 
@@ -42,12 +43,14 @@ def create_app() -> FastAPI:
         port=int(os.environ.get("CLICKHOUSE_PORT", "8123")),
         password=os.environ.get("CLICKHOUSE_PASSWORD", "devpass"),
     )
+    app.state.saved_analyses_store = SavedAnalysesStore(app.state.clickhouse_client)
 
     app.include_router(session.router)
     app.include_router(inter.router)
     app.include_router(intra.router)
     app.include_router(raw.router)
     app.include_router(jobs.router)
+    app.include_router(analyses.router)
 
     return app
 
