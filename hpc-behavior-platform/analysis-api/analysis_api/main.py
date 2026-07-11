@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from redis import Redis
 
 from analysis_api.cache import RedisStageCache
@@ -19,6 +20,15 @@ from tensor_store.loader import get_client
 
 def create_app() -> FastAPI:
     app = FastAPI(title="HPC Behavior Platform Analysis API")
+
+    # behavior-ui (Phase 6) is a separate origin (Vite dev server / static
+    # host) calling this API directly from the browser.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=os.environ.get("CORS_ORIGINS", "http://localhost:5173").split(","),
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     app.state.session_store = SessionStore()
     app.state.stage_cache = RedisStageCache(

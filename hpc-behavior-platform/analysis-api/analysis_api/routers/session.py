@@ -62,4 +62,8 @@ def session_status(
         resp.n_nodes = len(session.bundle.nodes)
         resp.n_metrics = len(session.bundle.metrics)
         resp.n_timesteps = session.bundle.X.shape[2]
+        resp.nodes = session.bundle.nodes
+        resp.metrics = session.bundle.metrics
+        resp.inactive_nodes = session.bundle.inactive_nodes
+        resp.times = [str(t) for t in session.bundle.times]
     return resp

@@ -26,6 +26,10 @@ class SessionStatusResponse(BaseModel):
     n_nodes: int | None = None
     n_metrics: int | None = None
     n_timesteps: int | None = None
+    nodes: list[str] | None = None
+    metrics: list[str] | None = None
+    inactive_nodes: list[str] | None = None
+    times: list[str] | None = None
 
 
 class UmapParams(BaseModel):
