@@ -1,6 +1,6 @@
 # DR Ablation (paper Fig. 9)
 
-Generated: 2026-07-11T16:19:57.743002+00:00
+Generated: 2026-07-11T17:24:03.275224+00:00
 
 | method | ARI | silhouette | davies_bouldin | calinski_harabasz |
 |---|---|---|---|---|

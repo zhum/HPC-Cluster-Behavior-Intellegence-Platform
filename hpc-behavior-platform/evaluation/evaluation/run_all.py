@@ -34,6 +34,15 @@ def main() -> None:
     ablation_report = run_ablation(X, true_labels, k=4)
     write_ablation_report(ablation_report, REPORTS_DIR / "dr_ablation.md")
 
+    try:
+        from evaluation.research_contrastive import run_contrastive_vs_multidr
+        from evaluation.research_contrastive import write_markdown_report as write_research_report
+
+        research_result = run_contrastive_vs_multidr(X, true_labels, k=4)
+        write_research_report(research_result, REPORTS_DIR / "research_contrastive.md")
+    except ImportError:
+        print("skipping research_contrastive report: install the 'research' extra (torch) to generate it")
+
     lines = [
         "# Fault Injection Report",
         "",

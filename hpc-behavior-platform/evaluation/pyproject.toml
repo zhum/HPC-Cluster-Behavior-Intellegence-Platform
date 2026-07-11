@@ -15,6 +15,12 @@ dev = [
     "ruff>=0.5",
     "mypy>=1.10",
 ]
+# Phase 8 item 5 (research track, gated behind evidence): deep contrastive
+# embeddings. Kept as a separate extra -- a heavy dependency for an
+# explicitly experimental, not-production-wired module.
+research = [
+    "torch>=2.0",
+]
 
 [tool.ruff]
 line-length = 100

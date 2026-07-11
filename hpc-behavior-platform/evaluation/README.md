@@ -13,6 +13,11 @@ evaluation/
                          perturbations + Phase 4 gate (recall>=0.9 at |z|>=3)
   ground_truth.py        precision@k against jobs/incident lists (pure functions,
                          no live ClickHouse dependency)
+  research_contrastive.py  Phase 8 item 5 (research track, gated behind evidence):
+                         deep contrastive (InfoNCE) node embeddings as an
+                         ALTERNATIVE dr1, evaluated against MulTiDR -- NOT wired
+                         into the production pipeline. Needs the `research` extra
+                         (torch): `pip install -e ".[research]"`.
   run_all.py             regenerates reports/*.md
 ```
 
@@ -34,3 +39,11 @@ Run `python -m evaluation.run_all` to regenerate the reports.
 
 See `tests/test_fault_injection.py` for the exact assertions and
 `reports/*.md` for the generated tables.
+
+## Research track (Phase 8 item 5, gated behind evidence)
+
+Deep contrastive (InfoNCE) node embeddings, evaluated as an alternative to
+dr1 on the same planted-cluster fixture: ARI 0.911 vs MulTiDR's 1.000,
+silhouette 0.539 vs 0.921. **Verdict: DO NOT ADOPT** — MulTiDR's explicit
+per-metric temporal PCA remains the default. Not wired into
+analysis-core's production pipeline; see `research_contrastive.py`.
