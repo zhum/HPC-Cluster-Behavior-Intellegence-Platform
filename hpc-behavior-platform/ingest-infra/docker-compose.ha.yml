@@ -1,0 +1,218 @@
+# Phase 8 item 2 (optional, beyond the paper): HA infra + retention tiering.
+#
+# Standalone overlay -- run with:
+#   docker compose -f docker-compose.ha.yml up -d
+# Deliberately NOT merged into docker-compose.yml: that file is the simple
+# single-node dev stack every earlier phase's testing depends on, and this
+# is a separate, opt-in scale-out topology (own network/volumes/service
+# names, no collisions).
+#
+# Gives you: a 3-node ClickHouse Keeper quorum (a single keeper node would
+# itself be a single point of failure -- defeats the purpose), 2 ClickHouse
+# replicas of the same shard, a 3-broker Redpanda cluster, and MinIO as the
+# S3-compatible cold-storage tier for the >45-day retention TTL.
+
+services:
+  clickhouse-keeper-1:
+    image: clickhouse/clickhouse-keeper:24.3
+    volumes:
+      - ./ha/clickhouse/keeper/keeper1.xml:/etc/clickhouse-keeper/keeper_config.xml
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z -w 1 127.0.0.1 2181"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  clickhouse-keeper-2:
+    image: clickhouse/clickhouse-keeper:24.3
+    volumes:
+      - ./ha/clickhouse/keeper/keeper2.xml:/etc/clickhouse-keeper/keeper_config.xml
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z -w 1 127.0.0.1 2181"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  clickhouse-keeper-3:
+    image: clickhouse/clickhouse-keeper:24.3
+    volumes:
+      - ./ha/clickhouse/keeper/keeper3.xml:/etc/clickhouse-keeper/keeper_config.xml
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z -w 1 127.0.0.1 2181"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  minio:
+    image: minio/minio:RELEASE.2024-06-13T22-53-53Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9100:9000"
+      - "9101:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 minioadmin minioadmin &&
+      mc mb -p local/clickhouse-cold
+      "
+
+  clickhouse-1:
+    image: clickhouse/clickhouse-server:24.3
+    environment:
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: devpass
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    ports:
+      - "8124:8123"
+      - "9001:9000"
+    volumes:
+      - clickhouse1_data:/var/lib/clickhouse
+      - ./ha/clickhouse/common/cluster.xml:/etc/clickhouse-server/config.d/cluster.xml
+      - ./ha/clickhouse/common/storage.xml:/etc/clickhouse-server/config.d/storage.xml
+      - ./ha/clickhouse/node1/macros.xml:/etc/clickhouse-server/config.d/macros.xml
+      - ./ha/clickhouse/schema_ha.sql:/docker-entrypoint-initdb.d/schema_ha.sql
+    depends_on:
+      clickhouse-keeper-1:
+        condition: service_healthy
+      clickhouse-keeper-2:
+        condition: service_healthy
+      clickhouse-keeper-3:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  clickhouse-2:
+    image: clickhouse/clickhouse-server:24.3
+    environment:
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: devpass
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    ports:
+      - "8125:8123"
+      - "9002:9000"
+    volumes:
+      - clickhouse2_data:/var/lib/clickhouse
+      - ./ha/clickhouse/common/cluster.xml:/etc/clickhouse-server/config.d/cluster.xml
+      - ./ha/clickhouse/common/storage.xml:/etc/clickhouse-server/config.d/storage.xml
+      - ./ha/clickhouse/node2/macros.xml:/etc/clickhouse-server/config.d/macros.xml
+      - ./ha/clickhouse/schema_ha.sql:/docker-entrypoint-initdb.d/schema_ha.sql
+    depends_on:
+      clickhouse-keeper-1:
+        condition: service_healthy
+      clickhouse-keeper-2:
+        condition: service_healthy
+      clickhouse-keeper-3:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redpanda-1:
+    image: redpandadata/redpanda:v24.1.11
+    command:
+      - redpanda
+      - start
+      - --smp=1
+      - --memory=1G
+      - --overprovisioned
+      - --node-id=0
+      - --check=false
+      - --kafka-addr=PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr=PLAINTEXT://redpanda-1:9092
+      - --rpc-addr=0.0.0.0:33145
+      - --advertise-rpc-addr=redpanda-1:33145
+    ports:
+      - "9093:9092"
+    healthcheck:
+      test: ["CMD", "rpk", "cluster", "health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redpanda-2:
+    image: redpandadata/redpanda:v24.1.11
+    command:
+      - redpanda
+      - start
+      - --smp=1
+      - --memory=1G
+      - --overprovisioned
+      - --node-id=1
+      - --check=false
+      - --kafka-addr=PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr=PLAINTEXT://redpanda-2:9092
+      - --rpc-addr=0.0.0.0:33145
+      - --advertise-rpc-addr=redpanda-2:33145
+      - --seeds=redpanda-1:33145
+    depends_on:
+      redpanda-1:
+        condition: service_healthy
+
+  redpanda-3:
+    image: redpandadata/redpanda:v24.1.11
+    command:
+      - redpanda
+      - start
+      - --smp=1
+      - --memory=1G
+      - --overprovisioned
+      - --node-id=2
+      - --check=false
+      - --kafka-addr=PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr=PLAINTEXT://redpanda-3:9092
+      - --rpc-addr=0.0.0.0:33145
+      - --advertise-rpc-addr=redpanda-3:33145
+      - --seeds=redpanda-1:33145
+    depends_on:
+      redpanda-1:
+        condition: service_healthy
+
+  redpanda-topics:
+    image: redpandadata/redpanda:v24.1.11
+    depends_on:
+      redpanda-1:
+        condition: service_healthy
+    entrypoint: >
+      bash -c "
+      sleep 5 &&
+      rpk topic create otel.metrics --brokers redpanda-1:9092 -r 3 &&
+      rpk topic create slurm.jobs --brokers redpanda-1:9092 -r 3 &&
+      rpk topic create ib.metrics --brokers redpanda-1:9092 -r 3
+      "
+
+volumes:
+  clickhouse1_data:
+  clickhouse2_data:
+  minio_data:

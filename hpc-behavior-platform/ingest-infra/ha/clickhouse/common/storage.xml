@@ -1,0 +1,30 @@
+<clickhouse>
+    <storage_configuration>
+        <disks>
+            <s3_cold>
+                <type>s3</type>
+                <endpoint>http://minio:9000/clickhouse-cold/</endpoint>
+                <access_key_id>minioadmin</access_key_id>
+                <secret_access_key>minioadmin</secret_access_key>
+                <metadata_path>/var/lib/clickhouse/disks/s3_cold/</metadata_path>
+            </s3_cold>
+        </disks>
+        <policies>
+            <!-- Phase 8 item 2: retention tiering. Real metrics_raw TTL moves
+                 parts to s3_cold after 45 days (matching the paper-derived
+                 retention math in the base schema); the demo table below uses
+                 a much shorter TTL purely so the move is observable without
+                 waiting 45 days. -->
+            <tiered>
+                <volumes>
+                    <hot>
+                        <disk>default</disk>
+                    </hot>
+                    <cold>
+                        <disk>s3_cold</disk>
+                    </cold>
+                </volumes>
+            </tiered>
+        </policies>
+    </storage_configuration>
+</clickhouse>
