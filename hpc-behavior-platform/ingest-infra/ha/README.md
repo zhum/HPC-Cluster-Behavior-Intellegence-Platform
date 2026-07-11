@@ -27,6 +27,12 @@ docker compose -f docker-compose.ha.yml up -d
 shape, same policy) so the move is observable in a live check without
 waiting 45 days. It is not part of the real retention design.
 
+## Verifying it
+
+Run `./ha/verify.sh` after bringing the stack up (checks replication, Redpanda
+cluster health/replication-factor, and retention tiering; exits non-zero on
+the first failed check; takes ~40s due to waiting out the demo table's TTL).
+
 ## Verified live (ports differ from the base dev stack to avoid collisions)
 
 ```bash
