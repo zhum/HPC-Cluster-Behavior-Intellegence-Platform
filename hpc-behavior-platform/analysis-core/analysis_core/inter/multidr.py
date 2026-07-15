@@ -21,6 +21,10 @@ def dr1_pca_over_time(X: np.ndarray) -> np.ndarray:
     (z-score each node's own time series), replaces any remaining NaN (from
     zero-variance rows or NaN gaps) with 0, then fits PCA(n_components=1) with
     rows=nodes, features=timesteps. V[:, m] is the first PC score per node.
+
+    svd_solver is left at sklearn's "auto", which already switches to
+    randomized SVD when a slice is large; forcing a solver here would perturb
+    PC values and every downstream embedding for no runtime gain.
     """
     n, m, t = X.shape
     V = np.zeros((n, m), dtype=np.float64)

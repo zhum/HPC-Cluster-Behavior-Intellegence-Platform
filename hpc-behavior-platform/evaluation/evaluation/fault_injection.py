@@ -5,7 +5,7 @@ for the right metrics/bands. Also restates the Phase 4 shipping gate
 """
 from __future__ import annotations
 
-from typing import Callable
+from typing import Callable, NamedTuple
 
 import numpy as np
 
@@ -79,6 +79,31 @@ FAULTS: dict[str, Callable[[np.ndarray, list[int]], np.ndarray]] = {
     "dead_node": lambda S, affected: inject_dead_node(S, affected, start=S.shape[1] // 2),
 }
 
+# Per-fault detection settings, empirically characterized (recall 1.00 across
+# seeds 0-4 on the default fixture for every entry):
+#
+# - memory_leak_ramp lives in the "2h" band, not "7d": mrDMD's level windows
+#   cap the slowest resolvable period, so on an 8h fixture (T=480 @ 60s) the
+#   24h/7d bands only ever see exact-DC modes and the ramp's per-window
+#   signature lands in "2h" (z ~ 400+ for injected nodes, defaults suffice).
+# - ib_error_burst is a 2-sample impulse: with default max_cycles=1 no mode
+#   faster than 1 cycle per finest window is retained, so the "5m"/"30m"
+#   bands are structurally empty. Finer windows (16) plus a higher frequency
+#   cutoff (max_cycles=8) make the impulse dominate its window in the "5m"
+#   band.
+class FaultDetection(NamedTuple):
+    band: str
+    max_cycles: int
+    min_finest_window: int
+
+
+FAULT_DETECTION: dict[str, FaultDetection] = {
+    "cpu_steal": FaultDetection(band="2h", max_cycles=1, min_finest_window=32),
+    "memory_leak_ramp": FaultDetection(band="2h", max_cycles=1, min_finest_window=32),
+    "ib_error_burst": FaultDetection(band="5m", max_cycles=8, min_finest_window=16),
+    "dead_node": FaultDetection(band="2h", max_cycles=1, min_finest_window=32),
+}
+
 
 def run_fault_case(
     fault_name: str,
@@ -89,6 +114,8 @@ def run_fault_case(
     period_samples: float = 70,
     resolution_s: float = 60,
     seed: int = 0,
+    max_cycles: int = 1,
+    min_finest_window: int = 32,
 ) -> dict[str, object]:
     S = _phase_diverse_baseline(n_nodes, T, period_samples, seed=seed)
     affected = list(range(n_nodes - n_affected, n_nodes))
@@ -109,6 +136,8 @@ def run_fault_case(
         band=band,
         resolution_s=resolution_s,
         baseline_windows={"metric": (0, fault_start)},
+        max_cycles=max_cycles,
+        min_finest_window=min_finest_window,
     )
     z = result.z[:, 0]
     flagged = {i for i in range(n_nodes) if abs(z[i]) >= Z_THRESHOLD}

@@ -1,6 +1,6 @@
 # Cluster Quality Benchmark
 
-Generated: 2026-07-11T17:24:02.796506+00:00
+Generated: 2026-07-11T22:43:46.437644+00:00
 
 | dataset | N | M | T | ARI (MulTiDR) | ARI (PCA-only) | silhouette | davies_bouldin | calinski_harabasz | trustworthiness | continuity | gate: ARI>0.9 | gate: beats PCA-only |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|

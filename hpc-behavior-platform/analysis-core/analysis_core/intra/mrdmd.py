@@ -35,7 +35,7 @@ NAMED_BAND_PERIODS_S: dict[str, float] = {
 class Mode:
     level: int
     window: tuple[float, float]  # (t0, tend) in timestep units
-    omega: complex  # log(eigenvalue) / dt, rad/timestep -- continuous-time analog
+    omega: complex  # log(eigenvalue), rad/timestep (dt = 1 timestep) -- continuous-time analog
     amplitude: np.ndarray  # (n_nodes,) per-node contribution magnitude
     power: float  # sum of amplitude**2 across nodes, a mode-energy scalar
 
