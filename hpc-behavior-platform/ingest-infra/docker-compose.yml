@@ -44,6 +44,7 @@ services:
     volumes:
       - clickhouse_data:/var/lib/clickhouse
       - ./clickhouse/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+      - ./clickhouse/sink.sql:/docker-entrypoint-initdb.d/sink.sql
     ulimits:
       nofile:
         soft: 262144
@@ -55,7 +56,8 @@ services:
       retries: 20
 
   otel-collector:
-    image: otel/opentelemetry-collector-contrib:0.104.0
+    # >= 0.110 for metricsgeneration; independent of otel-sink's pinned version
+    image: otel/opentelemetry-collector-contrib:0.110.0
     command: ["--config=/etc/otel/otel-collector-config.yaml"]
     volumes:
       - ./otel/otel-collector-config.yaml:/etc/otel/otel-collector-config.yaml
@@ -65,6 +67,30 @@ services:
     depends_on:
       redpanda:
         condition: service_healthy
+
+  # Reads otel.metrics into ClickHouse (docs/design-redpanda-clickhouse-sink.md).
+  otel-sink:
+    image: otel/opentelemetry-collector-contrib:0.104.0
+    command: ["--config=/etc/otel/otel-sink-config.yaml"]
+    environment:
+      KAFKA_BROKERS: "[redpanda:9092]"
+      CLICKHOUSE_ENDPOINT: tcp://clickhouse:9000
+      CLICKHOUSE_PASSWORD: devpass
+    volumes:
+      - ./otel/otel-sink-config.yaml:/etc/otel/otel-sink-config.yaml
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+
+  # Local scrape target for the edge collector, so the OTLP path is testable
+  # without real compute nodes. Reports the docker host as node_id "node-exporter".
+  node-exporter:
+    image: prom/node-exporter:v1.8.1
+    command: ["--path.rootfs=/host"]
+    volumes:
+      - /:/host:ro,rslave
 
   grafana:
     image: grafana/grafana:11.1.0

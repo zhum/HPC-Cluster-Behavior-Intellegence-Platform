@@ -14,18 +14,241 @@ receivers:
           scrape_interval: 15s
           static_configs:
             - targets: ["node-exporter:9100"]
+          relabel_configs: &node_id
+            # node_id = target host, explicit on every point; the sink MV keys on it.
+            - source_labels: [__address__]
+              regex: '([^:]+):\d+'
+              target_label: node_id
         - job_name: dcgm_exporter
           scrape_interval: 15s
           static_configs:
             - targets: ["dcgm-exporter:9400"]
+          relabel_configs: *node_id
 
+# Curation happens here, not in the sink: rate conversion is stateful per series
+# and this collector is the one that scrapes each series. Output to Kafka is one
+# gauge per (node_id, platform metric) -- see docs/design-redpanda-clickhouse-sink.md.
 processors:
-  batch:
-    timeout: 5s
-    send_batch_size: 8192
   memory_limiter:
     check_interval: 2s
     limit_mib: 4096
+
+  # Allow-list: everything not mapped below is dropped (keeps M well under the
+  # analysis-api cap of 500 metrics).
+  filter/allowlist:
+    metrics:
+      include:
+        match_type: strict
+        metric_names:
+          - node_cpu_seconds_total
+          - node_load1
+          - node_context_switches_total
+          - node_intr_total
+          - node_memory_MemAvailable_bytes
+          - node_memory_MemTotal_bytes
+          - node_memory_SwapTotal_bytes
+          - node_memory_SwapFree_bytes
+          - node_vmstat_pgfault
+          - node_netstat_Tcp_RetransSegs
+          - node_network_receive_bytes_total
+          - node_network_transmit_bytes_total
+          - node_network_receive_drop_total
+          - node_disk_reads_completed_total
+          - node_disk_writes_completed_total
+          - node_disk_read_bytes_total
+          - node_disk_written_bytes_total
+          - node_disk_read_time_seconds_total
+          - node_disk_write_time_seconds_total
+          - DCGM_FI_DEV_GPU_UTIL
+          - DCGM_FI_DEV_FB_USED
+          - DCGM_FI_DEV_POWER_USAGE
+          - DCGM_FI_DEV_GPU_TEMP
+          - DCGM_FI_DEV_ECC_SBE_VOL_TOTAL
+          - DCGM_FI_DEV_ECC_DBE_VOL_TOTAL
+          - DCGM_FI_PROF_NVLINK_TX_BYTES
+          - DCGM_FI_PROF_NVLINK_RX_BYTES
+
+  filter/datapoints:
+    error_mode: ignore
+    metrics:
+      datapoint:
+        - 'metric.name == "node_cpu_seconds_total" and attributes["mode"] != "idle"'
+        - 'attributes["device"] == "lo"'
+
+  # node_exporter exposes vmstat/netstat counters as untyped, which arrive as
+  # gauges; make them cumulative sums so the rate conversion below applies.
+  transform/untyped_counters:
+    error_mode: ignore
+    metric_statements:
+      - context: metric
+        statements:
+          - convert_gauge_to_sum("cumulative", true) where name == "node_vmstat_pgfault"
+          - convert_gauge_to_sum("cumulative", true) where name == "node_netstat_Tcp_RetransSegs"
+
+  cumulativetodelta:
+    include:
+      match_type: regexp
+      metrics:
+        - '^node_.*_total$'
+        - '^node_vmstat_pgfault$'
+        - '^node_netstat_Tcp_RetransSegs$'
+        - '^DCGM_FI_DEV_ECC_.*_VOL_TOTAL$'
+
+  deltatorate:
+    metrics:
+      - node_cpu_seconds_total
+      - node_context_switches_total
+      - node_intr_total
+      - node_network_receive_bytes_total
+      - node_network_transmit_bytes_total
+      - node_network_receive_drop_total
+      - node_disk_reads_completed_total
+      - node_disk_writes_completed_total
+      - node_disk_read_bytes_total
+      - node_disk_written_bytes_total
+      - node_disk_read_time_seconds_total
+      - node_disk_write_time_seconds_total
+      - node_vmstat_pgfault
+      - node_netstat_Tcp_RetransSegs
+      - DCGM_FI_DEV_ECC_SBE_VOL_TOTAL
+      - DCGM_FI_DEV_ECC_DBE_VOL_TOTAL
+
+  # Rename to the platform names (same as tools/synth_nodes.py) and aggregate
+  # away every label except node_id.
+  metricstransform:
+    transforms:
+      - include: node_cpu_seconds_total   # idle-seconds/s per core -> mean over cores
+        action: update
+        new_name: cpu.utilization
+        operations: [{action: aggregate_labels, label_set: [node_id], aggregation_type: mean}]
+      - include: node_load1
+        action: update
+        new_name: cpu.load_avg
+        operations: [{action: aggregate_labels, label_set: [node_id], aggregation_type: max}]
+      - include: node_context_switches_total
+        action: update
+        new_name: cpu.context_switches
+        operations: [{action: aggregate_labels, label_set: [node_id], aggregation_type: sum}]
+      - include: node_intr_total
+        action: update
+        new_name: cpu.interrupts
+        operations: [{action: aggregate_labels, label_set: [node_id], aggregation_type: sum}]
+      - include: node_memory_MemAvailable_bytes
+        action: update
+        new_name: memory.free
+        operations: [{action: aggregate_labels, label_set: [node_id], aggregation_type: max}]
+      - include: node_network_receive_bytes_total
+        action: update
+        new_name: network.rx_bytes
+        operations: [{action: aggregate_labels, label_set: [node_id], aggregation_type: sum}]
+      - include: node_network_transmit_bytes_total
+        action: update
+        new_name: network.tx_bytes
+        operations: [{action: aggregate_labels, label_set: [node_id], aggregation_type: sum}]
+      - include: node_network_receive_drop_total
+        action: update
+        new_name: network.drops
+        operations: [{action: aggregate_labels, label_set: [node_id], aggregation_type: sum}]
+      - include: ^node_disk_(reads|writes)_completed_total$
+        match_type: regexp
+        action: combine
+        new_name: storage.iops
+        operations: [{action: aggregate_labels, label_set: [node_id], aggregation_type: sum}]
+      - include: ^node_disk_(read|written)_bytes_total$
+        match_type: regexp
+        action: combine
+        new_name: storage.throughput
+        operations: [{action: aggregate_labels, label_set: [node_id], aggregation_type: sum}]
+      - include: node_vmstat_pgfault
+        action: update
+        new_name: memory.page_faults
+        operations: [{action: aggregate_labels, label_set: [node_id], aggregation_type: sum}]
+      - include: node_netstat_Tcp_RetransSegs
+        action: update
+        new_name: network.retransmits
+        operations: [{action: aggregate_labels, label_set: [node_id], aggregation_type: sum}]
+      # helper for storage.latency below (busy seconds/s summed over disks); dropped after use
+      - include: ^node_disk_(read|write)_time_seconds_total$
+        match_type: regexp
+        action: combine
+        new_name: storage.io_time
+        operations: [{action: aggregate_labels, label_set: [node_id], aggregation_type: sum}]
+      - include: DCGM_FI_DEV_GPU_UTIL
+        action: update
+        new_name: gpu.utilization
+        operations: [{action: aggregate_labels, label_set: [node_id], aggregation_type: mean}]
+      - include: DCGM_FI_DEV_FB_USED
+        action: update
+        new_name: gpu.memory_used
+        operations: [{action: aggregate_labels, label_set: [node_id], aggregation_type: sum}]
+      - include: DCGM_FI_DEV_POWER_USAGE
+        action: update
+        new_name: gpu.power
+        operations: [{action: aggregate_labels, label_set: [node_id], aggregation_type: sum}]
+      - include: DCGM_FI_DEV_GPU_TEMP
+        action: update
+        new_name: gpu.temperature
+        operations: [{action: aggregate_labels, label_set: [node_id], aggregation_type: max}]
+      - include: ^DCGM_FI_DEV_ECC_(SBE|DBE)_VOL_TOTAL$
+        match_type: regexp
+        action: combine
+        new_name: gpu.ecc_errors
+        operations: [{action: aggregate_labels, label_set: [node_id], aggregation_type: sum}]
+      - include: DCGM_FI_PROF_NVLINK_TX_BYTES
+        action: update
+        new_name: gpu.nvlink_tx
+        operations: [{action: aggregate_labels, label_set: [node_id], aggregation_type: sum}]
+      - include: DCGM_FI_PROF_NVLINK_RX_BYTES
+        action: update
+        new_name: gpu.nvlink_rx
+        operations: [{action: aggregate_labels, label_set: [node_id], aggregation_type: sum}]
+      # inputs for metricsgeneration: reduce to the node_id label only
+      - include: ^node_memory_(MemTotal|SwapTotal|SwapFree)_bytes$
+        match_type: regexp
+        action: update
+        operations: [{action: aggregate_labels, label_set: [node_id], aggregation_type: max}]
+
+  # Metrics that are arithmetic over two others. Each scrape target is its own
+  # resource, so metric2's value is the same node's.
+  experimental_metricsgeneration:
+    rules:
+      - name: memory.used
+        type: calculate
+        metric1: node_memory_MemTotal_bytes
+        metric2: memory.free
+        operation: subtract
+      - name: memory.swap
+        type: calculate
+        metric1: node_memory_SwapTotal_bytes
+        metric2: node_memory_SwapFree_bytes
+        operation: subtract
+      - name: storage.latency      # seconds per completed I/O
+        type: calculate
+        metric1: storage.io_time
+        metric2: storage.iops
+        operation: divide
+
+  filter/helpers:
+    metrics:
+      exclude:
+        match_type: strict
+        metric_names:
+          - node_memory_MemTotal_bytes
+          - node_memory_SwapTotal_bytes
+          - node_memory_SwapFree_bytes
+          - storage.io_time
+
+  # cpu.utilization so far is the idle fraction.
+  transform/cpu_busy:
+    error_mode: ignore
+    metric_statements:
+      - context: datapoint
+        statements:
+          - set(value_double, 1.0 - value_double) where metric.name == "cpu.utilization"
+
+  batch:
+    timeout: 5s
+    send_batch_size: 8192
 
 exporters:
   kafka/otel_metrics:
@@ -33,20 +256,26 @@ exporters:
     topic: otel.metrics
     encoding: otlp_proto
 
-  kafka/ib_metrics:
-    brokers: ["redpanda:9092"]
-    topic: ib.metrics
-    encoding: otlp_proto
-
-  logging:
+  debug:
     verbosity: basic
 
 service:
   pipelines:
     metrics:
       receivers: [otlp, prometheus]
-      processors: [memory_limiter, batch]
-      exporters: [kafka/otel_metrics, logging]
+      processors:
+        - memory_limiter
+        - filter/allowlist
+        - filter/datapoints
+        - transform/untyped_counters
+        - cumulativetodelta
+        - deltatorate
+        - metricstransform
+        - experimental_metricsgeneration
+        - filter/helpers
+        - transform/cpu_busy
+        - batch
+      exporters: [kafka/otel_metrics, debug]
   telemetry:
     logs:
       level: info

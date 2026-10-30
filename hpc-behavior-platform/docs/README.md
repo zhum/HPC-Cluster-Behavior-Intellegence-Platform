@@ -10,4 +10,5 @@
 Planning docs (not user-facing):
 
 - [`plan-zscore-parallelization.md`](./plan-zscore-parallelization.md) — deferred perf plan
+- [`design-redpanda-clickhouse-sink.md`](./design-redpanda-clickhouse-sink.md) — Redpanda → ClickHouse sink design + implementation notes
 - [`test-plan-hardware-oci.md`](./test-plan-hardware-oci.md) — draft hardware/OCI validation checklist

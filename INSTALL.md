@@ -83,7 +83,7 @@ docker compose up -d
 docker compose ps
 ```
 
-Starts Redpanda (+ one-shot `redpanda-topics` job that creates `otel.metrics`, `slurm.jobs`, `ib.metrics`), ClickHouse, OTel Collector, Grafana, Redis. The ClickHouse schema (`clickhouse/schema.sql`) is applied automatically on **first** start of the empty `clickhouse_data` volume.
+Starts Redpanda (+ one-shot `redpanda-topics` job that creates `otel.metrics`, `slurm.jobs`, `ib.metrics`), ClickHouse, the edge OTel Collector, the `otel-sink` collector (Redpanda → ClickHouse), a local `node-exporter`, Grafana, Redis. The ClickHouse schema (`clickhouse/schema.sql`, then the sink tables in `clickhouse/sink.sql`) is applied automatically on **first** start of the empty `clickhouse_data` volume — an older volume won't get the sink tables; recreate it with `docker compose down -v` (destroys local data).
 
 Wait until ClickHouse and Redpanda report `healthy`, then verify:
 
@@ -104,7 +104,7 @@ Endpoints:
 
 ## 1.4 Load synthetic telemetry
 
-The OTel Collector in the dev stack scrapes `node-exporter:9100` / `dcgm-exporter:9400`, which don't exist locally — so locally, data comes from the synthetic loader, which writes straight into ClickHouse.
+The bundled `node-exporter` gives you one real node (`node_id = node-exporter`, ~10 metrics) flowing through the full collector → Redpanda → sink → ClickHouse path within a minute of startup (`dcgm-exporter` scrape warnings in the collector log are expected locally). That's too little for clustering — for a realistic many-node dataset use the synthetic loader, which writes straight into ClickHouse:
 
 **Option A — continuous loader in Docker** (200 nodes × 50 metrics, 15 s interval):
 
@@ -239,7 +239,7 @@ The current code base is a research-grade implementation. These are not deployme
 | # | Gap | Impact | What to do |
 |---|---|---|---|
 | 1 | **No authentication anywhere.** `analysis-api` has no login/RBAC; `user_id` on `/analyses*` is caller-supplied and unverified. | Anyone who reaches the API can read/modify any user's saved analyses and query all telemetry. | Put API + UI behind an authenticating reverse proxy (SSO/OIDC or at minimum basic auth + TLS). Keep ClickHouse, Redis, Redpanda, MinIO on a private network. See [2.8](#28-ui--reverse-proxy-tls-auth). |
-| 2 | **No Redpanda → ClickHouse sink is shipped.** The OTel Collector and pollers publish to Redpanda topics, but nothing in the repo consumes `otel.metrics` / `ib.metrics` / `slurm.jobs` into `metrics_raw` / `jobs`. Locally only `synth_nodes.py` writes to ClickHouse (directly). | With real collectors, Redpanda fills up but `metrics_raw` stays empty. | Build/choose a sink before go-live (e.g. a small consumer service, ClickHouse Kafka engine + materialized view, or Redpanda Connect). Note the collector exports `otlp_proto` encoding, which must be decoded into the `metrics_raw` (ts, node_id, metric, value) shape. |
+| 2 | **GPU metrics depend on the dcgm-exporter field list.** All platform metrics are mapped in the edge collector, but `gpu.ecc_errors` and `gpu.nvlink_tx/rx` only appear if dcgm-exporter exports those fields — its default counters file doesn't. NVLink fields also need a profiling-capable datacenter GPU (untested; verified only on a GeForce card, where they are skipped). | Those GPU metrics silently absent from analysis. | Fresh installs: use `telemetry-agent/configs/dcgm-counters.csv` (section 2.6). Existing dcgm-exporters (runbook Option A): add its lines to the site's counters file. Confirm with `SELECT DISTINCT metric FROM metrics_raw WHERE metric LIKE 'gpu.%'`. |
 | 3 | **Single uvicorn worker only.** `SessionStore` is an in-process dict (`analysis_api/session.py`). | `--workers >1` silently breaks sessions (session created on worker A is 404 on worker B). | Run exactly one worker per process. Scale out with multiple instances + sticky sessions at the proxy. |
 | 4 | **Redpanda advertises container-internal hostnames** (`redpanda:9092`, `redpanda-1:9092`…). | Kafka clients outside the Docker network (compute-node `ib_poller`, central `slurm_poller`) connect, then fail to resolve the advertised broker. | Change `--advertise-kafka-addr` to a hostname/IP reachable from compute nodes — see [2.4](#24-storage--broker-tier-ha-overlay). |
 | 5 | **Plaintext default credentials** — ClickHouse `devpass`, MinIO `minioadmin/minioadmin`, Grafana anonymous admin. | Trivial compromise. | Rotate all of them ([2.4](#24-storage--broker-tier-ha-overlay), [2.10](#210-grafana)). |
@@ -255,7 +255,7 @@ The current code base is a research-grade implementation. These are not deployme
  node_exporter :9100  ◄── scrape ── OTel Collector :4317/:4318
  dcgm-exporter :9400  ◄── scrape ──      │
  ib_poller ─────────── Kafka ─────► Redpanda ×3 :9092/9093
-                                         │  (sink — gap #2)
+                                         │  otel-sink + ClickHouse Kafka engine
  slurmrestd ◄── slurm_poller (central)   ▼
                                     storage_server (32 vCPU / 256 GB / 8 TB NVMe)
                                     ──────────────────────────────────────────────
@@ -354,6 +354,8 @@ docker compose -p hbp -f docker-compose.ha.yml ps      # all healthy; *-init / *
 
 `verify.sh` checks that a row written to replica 1 appears on replica 2, Redpanda health and RF=3, and the tiering policy. Do not continue until it passes.
 
+The overlay also starts the sink: `ha/clickhouse/sink_ha.sql` (Kafka-engine tables for `ib.metrics` / `slurm.jobs`, OTel landing tables) on both replicas, and `otel-sink-1` / `otel-sink-2` (one per replica) for `otel.metrics`. If you rotated the ClickHouse password in (a), update `CLICKHOUSE_PASSWORD` on both `otel-sink-*` services too. Kafka-engine broker lists are in `sink_ha.sql`; if you changed Redpanda listeners in (b), keep the internal `redpanda-N:9092` names there. Consumer failover between replicas was measured at 2–4 minutes (no data loss).
+
 **e) Restart on reboot.** Neither Compose file sets a `restart:` policy, so containers will **not** come back after a host reboot. Add `restart: unless-stopped` to every long-running service in `docker-compose.ha.yml` (not to the one-shot `minio-init` / `redpanda-topics` jobs) before `up -d`.
 
 ## 2.5 Redis and OTel Collector
@@ -376,16 +378,17 @@ docker run -d --name hbp-redis --restart unless-stopped --network hbp_default \
 cp $HBP/ingest-infra/otel/otel-collector-config.yaml /opt/hbp/otel-collector-config.yaml
 ```
 
-- `exporters.*.brokers`: `["redpanda:9092"]` → `["redpanda-1:9092","redpanda-2:9092","redpanda-3:9092"]`
+- `exporters.kafka/otel_metrics.brokers`: `["redpanda:9092"]` → `["redpanda-1:9092","redpanda-2:9092","redpanda-3:9092"]`
 - `receivers.prometheus...static_configs.targets`: replace `node-exporter:9100` / `dcgm-exporter:9400` with your real nodes (`node001:9100`, …), or use `file_sd_configs` for large fleets.
-- Normalise metric names to what `tensor-store` expects (`cpu.utilization` style) with a `metricstransform` processor if your exporters name them differently — do not change the exporters themselves if other consumers depend on them.
+- Keep the `relabel_configs` (they set `node_id`, which the ClickHouse sink keys on) on any scrape job you add.
+- The config already curates node_exporter/DCGM output into all platform metric names (`filter/allowlist`, `cumulativetodelta`, `deltatorate`, `metricstransform`, `experimental_metricsgeneration`). Extend that mapping for anything else you need — do not change the exporters themselves if other consumers depend on them.
 - Size `memory_limiter.limit_mib` to the host.
 
 ```bash
 docker run -d --name hbp-otel --restart unless-stopped --network hbp_default \
   -p 4317:4317 -p 4318:4318 \
   -v /opt/hbp/otel-collector-config.yaml:/etc/otel/config.yaml:ro \
-  otel/opentelemetry-collector-contrib:0.104.0 --config=/etc/otel/config.yaml
+  otel/opentelemetry-collector-contrib:0.110.0 --config=/etc/otel/config.yaml   # >= 0.110: metricsgeneration
 docker logs -f hbp-otel   # look for scrape errors / Kafka connection errors
 ```
 
@@ -398,7 +401,9 @@ Full procedure, including the "existing exporters already running" path: `hpc-be
 cp telemetry-agent/configs/node_exporter.service /etc/systemd/system/
 systemctl enable --now node_exporter
 
-# GPU nodes only (requires nvidia-dcgm.service)
+# GPU nodes only (requires nvidia-dcgm.service). The counters file enables the
+# ECC and NVLink fields the platform maps (not in dcgm-exporter's defaults).
+install -D -m 644 telemetry-agent/configs/dcgm-counters.csv /etc/dcgm-exporter/hbp-counters.csv
 cp telemetry-agent/configs/dcgm_exporter.service /etc/systemd/system/
 systemctl enable --now dcgm-exporter
 
@@ -441,7 +446,7 @@ echo 'SLURMRESTD_TOKEN=<token>' | sudo install -m 640 -o root -g hbp /dev/stdin 
 sudo systemctl daemon-reload && sudo systemctl enable --now hbp-slurm-poller
 ```
 
-Roll out to a **canary subset** of nodes first and confirm data flows end to end (which requires the sink from gap #2) before adding the whole fleet.
+Roll out to a **canary subset** of nodes first and confirm data flows end to end before adding the whole fleet.
 
 ## 2.7 analysis-api
 
@@ -636,8 +641,11 @@ $CH --data-binary 'SELECT table, is_readonly, absolute_delay, queue_size FROM sy
 # real bytes/row, to validate the 45-day TTL
 $CH --data-binary "SELECT sum(bytes_on_disk)/sum(rows) FROM system.parts WHERE table='metrics_raw' AND active"
 
-# Redpanda consumer lag (once your sink exists)
-docker compose -p hbp -f $HBP/ingest-infra/docker-compose.ha.yml exec redpanda-1 rpk group list
+# sink: consumer lag per stream, and parse failures
+for g in hbp-clickhouse-sink hbp-clickhouse-ib hbp-clickhouse-slurm; do
+  docker compose -p hbp -f $HBP/ingest-infra/docker-compose.ha.yml exec redpanda-1 rpk group describe $g
+done
+$CH --data-binary 'SELECT topic, count(), any(error) FROM sink_errors GROUP BY topic'
 
 # app tier
 systemctl is-active hbp-api hbp-alerting hbp-slurm-poller
@@ -663,7 +671,8 @@ Then:
 | UI calls `localhost:8010` in production | `VITE_API_BASE` not set at **build** time | Set `.env.production`, rebuild |
 | `Address already in use` on `docker compose up` | Host port clash (6379, 9100, 3000 are common) | Remap host side of the `ports:` entry |
 | `ib_poller` logs Kafka connection errors / unknown host `redpanda` | Broker advertises internal name | Section 2.4b |
-| `metrics_raw` empty in production while Redpanda topics fill | No sink (gap #2) | Implement sink |
+| `metrics_raw` empty while Redpanda topics fill | Sink not consuming, or ClickHouse volume predates `sink.sql` | `rpk group describe hbp-clickhouse-sink` (and `-ib`, `-slurm`); `docker logs` of `otel-sink*`; `SELECT * FROM sink_errors`; `SHOW TABLES LIKE '%queue%'` |
+| Node metric missing from `metrics_raw` | Exporter doesn't expose the source series (GPU: gap #2), or a custom metric isn't in the edge collector's allow-list / mapping | `curl <node>:9100/metrics` / `:9400/metrics`; extend `filter/allowlist` + `metricstransform` |
 | `metrics_raw` empty locally | `synth-loader` not started, or started before ClickHouse was healthy | `docker compose --profile synth up -d synth-loader`; check its logs |
 | Clusters look like noise | Too few timesteps in window | Let loader run longer; widen time range |
 | Alerting reports stale results | Tensor disk cache reuse | Polling consumers must call `get_tensor(..., use_cache=False)` (alerting already does) |

@@ -41,6 +41,10 @@ to duplicate.
 1. **Inventory existing endpoints.** Confirm `node_exporter:9100` and
    `dcgm-exporter:9400` (or whatever ports are actually bound) are reachable
    from the ingest host — same subnet/VLAN, no firewall block.
+   GPU metrics `gpu.ecc_errors` / `gpu.nvlink_*` need extra DCGM fields that
+   dcgm-exporter's default counters file doesn't export: append the lines from
+   `telemetry-agent/configs/dcgm-counters.csv` to the site's counters file
+   (ask its owner — it's their config) or accept those metrics as absent.
 
 2. **Point this platform's OTel Collector at them.** Edit
    `ingest-infra/otel/otel-collector-config.yaml`'s `prometheus.scrape_configs`
@@ -119,6 +123,8 @@ requires this platform's own collectors end to end.
    # (unit already passes --collector.infiniband --web.listen-address=:9100)
 
    # dcgm-exporter — GPU nodes only, requires nvidia-dcgm.service running first
+   # counters file enables ECC + NVLink fields (not in dcgm-exporter defaults)
+   install -D -m 644 telemetry-agent/configs/dcgm-counters.csv /etc/dcgm-exporter/hbp-counters.csv
    cp telemetry-agent/configs/dcgm_exporter.service /etc/systemd/system/
    systemctl enable --now dcgm-exporter
    ```

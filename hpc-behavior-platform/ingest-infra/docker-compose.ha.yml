@@ -86,6 +86,7 @@ services:
       - ./ha/clickhouse/common/storage.xml:/etc/clickhouse-server/config.d/storage.xml
       - ./ha/clickhouse/node1/macros.xml:/etc/clickhouse-server/config.d/macros.xml
       - ./ha/clickhouse/schema_ha.sql:/docker-entrypoint-initdb.d/schema_ha.sql
+      - ./ha/clickhouse/sink_ha.sql:/docker-entrypoint-initdb.d/sink_ha.sql
     depends_on:
       clickhouse-keeper-1:
         condition: service_healthy
@@ -120,6 +121,7 @@ services:
       - ./ha/clickhouse/common/storage.xml:/etc/clickhouse-server/config.d/storage.xml
       - ./ha/clickhouse/node2/macros.xml:/etc/clickhouse-server/config.d/macros.xml
       - ./ha/clickhouse/schema_ha.sql:/docker-entrypoint-initdb.d/schema_ha.sql
+      - ./ha/clickhouse/sink_ha.sql:/docker-entrypoint-initdb.d/sink_ha.sql
     depends_on:
       clickhouse-keeper-1:
         condition: service_healthy
@@ -211,6 +213,42 @@ services:
       rpk topic create slurm.jobs --brokers redpanda-1:9092 -r 3 &&
       rpk topic create ib.metrics --brokers redpanda-1:9092 -r 3
       "
+
+  # otel.metrics -> clickhouse-1. One sink per replica, same consumer group:
+  # if a replica is down its sink stalls without committing and the group
+  # rebalances to the other (docs/design-redpanda-clickhouse-sink.md section 5).
+  otel-sink-1:
+    image: otel/opentelemetry-collector-contrib:0.104.0
+    command: ["--config=/etc/otel/otel-sink-config.yaml"]
+    environment:
+      KAFKA_BROKERS: "[redpanda-1:9092,redpanda-2:9092,redpanda-3:9092]"
+      CLICKHOUSE_ENDPOINT: tcp://clickhouse-1:9000
+      CLICKHOUSE_PASSWORD: devpass
+    volumes:
+      - ./otel/otel-sink-config.yaml:/etc/otel/otel-sink-config.yaml
+    depends_on:
+      redpanda-topics:
+        condition: service_completed_successfully
+      clickhouse-1:
+        condition: service_healthy
+
+  # otel.metrics -> clickhouse-2. One sink per replica, same consumer group:
+  # if a replica is down its sink stalls without committing and the group
+  # rebalances to the other (docs/design-redpanda-clickhouse-sink.md section 5).
+  otel-sink-2:
+    image: otel/opentelemetry-collector-contrib:0.104.0
+    command: ["--config=/etc/otel/otel-sink-config.yaml"]
+    environment:
+      KAFKA_BROKERS: "[redpanda-1:9092,redpanda-2:9092,redpanda-3:9092]"
+      CLICKHOUSE_ENDPOINT: tcp://clickhouse-2:9000
+      CLICKHOUSE_PASSWORD: devpass
+    volumes:
+      - ./otel/otel-sink-config.yaml:/etc/otel/otel-sink-config.yaml
+    depends_on:
+      redpanda-topics:
+        condition: service_completed_successfully
+      clickhouse-2:
+        condition: service_healthy
 
 volumes:
   clickhouse1_data:

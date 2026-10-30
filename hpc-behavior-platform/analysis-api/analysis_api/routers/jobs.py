@@ -21,8 +21,9 @@ def get_jobs_overlay(
     params = {"session_id": payload.session_id, "node_ids": sorted(payload.node_ids)}
 
     def compute():
-        query = "SELECT job_id, user, partition, node_list, state, start_time, end_time FROM jobs " \
-            "WHERE hasAny(node_list, {node_ids:Array(String)})"
+        # FINAL: every job is re-published each poll; collapse unmerged copies
+        query = "SELECT job_id, user, partition, node_list, state, start_time, end_time " \
+            "FROM jobs FINAL WHERE hasAny(node_list, {node_ids:Array(String)})"
         result = client.query(query, parameters={"node_ids": payload.node_ids})
 
         node_set = set(payload.node_ids)

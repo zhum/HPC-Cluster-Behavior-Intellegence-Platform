@@ -1,0 +1,14 @@
+# DCGM fields the platform maps (ingest-infra/otel/otel-collector-config.yaml).
+# dcgm-exporter's default-counters.csv leaves ECC commented out and has no
+# NVLink byte counters, so ship our own list: dcgm-exporter -f <this file>.
+# If the site already runs dcgm-exporter (runbook Option A), add these lines
+# to its counters file instead of replacing it.
+# Format: DCGM field, Prometheus metric type, help message
+DCGM_FI_DEV_GPU_UTIL,          gauge,   GPU utilization (in %).
+DCGM_FI_DEV_FB_USED,           gauge,   Frame buffer memory used (in MB).
+DCGM_FI_DEV_POWER_USAGE,       gauge,   Power draw (in W).
+DCGM_FI_DEV_GPU_TEMP,          gauge,   GPU temperature (in C).
+DCGM_FI_DEV_ECC_SBE_VOL_TOTAL, counter, Total number of single-bit volatile ECC errors.
+DCGM_FI_DEV_ECC_DBE_VOL_TOTAL, counter, Total number of double-bit volatile ECC errors.
+DCGM_FI_PROF_NVLINK_TX_BYTES,  gauge,   NVLink transmitted bytes per second (header + payload).
+DCGM_FI_PROF_NVLINK_RX_BYTES,  gauge,   NVLink received bytes per second (header + payload).

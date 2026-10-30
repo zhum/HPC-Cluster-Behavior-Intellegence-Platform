@@ -14,6 +14,18 @@ docker compose --profile synth up -d synth-loader   # 200-node / 50-metric load 
 Grafana: http://localhost:3000 (anonymous admin, dev only). ClickHouse HTTP:
 http://localhost:8123.
 
+## Redpanda → ClickHouse sink
+
+- `otel.metrics` → `otel-sink` collector (`otel/otel-sink-config.yaml`) → `Null`
+  landing tables → MV → `metrics_raw`. Metric curation (names, rates, `node_id`)
+  lives in the edge collector config.
+- `ib.metrics`, `slurm.jobs` → ClickHouse Kafka engine → MVs → `metrics_raw` / `jobs`.
+- Unparseable Kafka-engine messages land in `sink_errors` (7-day TTL).
+
+DDL: `clickhouse/sink.sql` (HA: `ha/clickhouse/sink_ha.sql`). Design and test
+notes: `../docs/design-redpanda-clickhouse-sink.md`. Poller unit tests:
+`pytest tools/test_pollers.py`.
+
 ## Retention math (8 TB storage_server, 45-day TTL on `metrics_raw`)
 
 Worst case at target scale: 10,000 nodes x 500 metrics / 15s sample interval

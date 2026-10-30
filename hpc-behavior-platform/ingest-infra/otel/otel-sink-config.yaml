@@ -1,0 +1,44 @@
+# Sink collector: otel.metrics (Redpanda) -> ClickHouse Null landing tables ->
+# metrics_raw via the MVs in clickhouse/sink.sql. Stateless -- all curation is
+# done by the edge collector (otel-collector-config.yaml) -- so it scales by
+# adding instances to the same consumer group (needs >= that many partitions).
+#
+# At-least-once: the Kafka offset is marked only after the export succeeded,
+# the exporter retries forever and has no in-memory queue that a crash could
+# lose. Duplicates are harmless (tensor-store reads argMax per grid cell).
+receivers:
+  kafka:
+    brokers: ${env:KAFKA_BROKERS}  # YAML list, e.g. "[redpanda-1:9092,redpanda-2:9092]"
+    topic: otel.metrics
+    encoding: otlp_proto
+    group_id: hbp-clickhouse-sink
+    initial_offset: earliest
+    message_marking:
+      after: true
+      on_error: false
+
+processors:
+  batch:
+    send_batch_size: 50000
+    timeout: 5s
+
+exporters:
+  clickhouse:
+    endpoint: ${env:CLICKHOUSE_ENDPOINT}
+    database: default
+    username: default
+    password: ${env:CLICKHOUSE_PASSWORD}
+    create_schema: false  # Null landing tables come from clickhouse/sink.sql
+    timeout: 10s
+    retry_on_failure:
+      enabled: true
+      max_elapsed_time: 0
+    sending_queue:
+      enabled: false
+
+service:
+  pipelines:
+    metrics:
+      receivers: [kafka]
+      processors: [batch]
+      exporters: [clickhouse]

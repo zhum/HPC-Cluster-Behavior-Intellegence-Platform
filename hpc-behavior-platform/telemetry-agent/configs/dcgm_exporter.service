@@ -6,7 +6,8 @@ Requires=nvidia-dcgm.service
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/dcgm-exporter --address :9400
+# Counters file: copy configs/dcgm-counters.csv there first.
+ExecStart=/usr/bin/dcgm-exporter --address :9400 -f /etc/dcgm-exporter/hbp-counters.csv
 Restart=always
 RestartSec=5
 User=root
