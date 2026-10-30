@@ -20,6 +20,14 @@ from pydmd import DMD, MrDMD
 
 MIN_FINEST_WINDOW = 32
 
+# pydmd's svd_rank=-1 means *no* truncation (0 is the optimal-threshold mode),
+# so numerically-zero singular values of a rank-deficient window -- a short
+# baseline window tiled across the series, a flatlined node -- were kept and
+# DMD divided by them (LinAlgError on numpy >= 2.5, silent garbage before).
+# An energy fraction this close to 1 keeps every mode except roundoff-level
+# ones, and pydmd applies it per mrDMD window.
+SVD_ENERGY = 1 - 1e-12
+
 # (name -> period in seconds). Kept ascending by period (descending by
 # frequency) since band-edge computation below relies on that ordering.
 NAMED_BAND_PERIODS_S: dict[str, float] = {
@@ -113,7 +121,7 @@ def mrdmd_spectrum(
         return [], segment
 
     max_level = compute_max_level(T, min_finest_window)
-    dmd = DMD(svd_rank=-1)
+    dmd = DMD(svd_rank=SVD_ENERGY)
     mrdmd = MrDMD(dmd, max_level=max_level, max_cycles=max_cycles)
     mrdmd.fit(S_used)
 

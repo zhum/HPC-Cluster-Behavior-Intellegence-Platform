@@ -107,3 +107,25 @@ def test_mrdmd_spectrum_frequency_isolated_to_correct_band():
     assert len(in_2h) > 0
     assert len(in_24h) == 0
     assert len(in_30m) == 0
+
+
+def test_mrdmd_spectrum_rank_deficient_tiled_baseline():
+    # default_baseline can pick a 1-timestep quiet window; tiled, that is a
+    # per-node constant matrix of rank 1. pydmd must not keep (and divide by)
+    # the numerically-zero singular values: one DC mode, finite amplitudes.
+    S = np.tile(np.array([[50.0], [53.0], [47.0]]), (1, 40))
+    modes, _ = mrdmd_spectrum(S)
+    assert len(modes) == 1
+    assert abs(modes[0].omega) < 1e-9
+    assert np.all(np.isfinite(modes[0].amplitude))
+
+
+def test_mrdmd_spectrum_flatlined_node():
+    rng = np.random.default_rng(0)
+    S = rng.normal(50, 5, size=(3, 40))
+    S[2] = 0.0  # dead node: zero row -> rank-deficient snapshot matrix
+    modes, _ = mrdmd_spectrum(S)
+    assert modes
+    for mode in modes:
+        assert np.all(np.isfinite(mode.amplitude))
+        assert mode.amplitude[2] < 1e-9
