@@ -16,12 +16,12 @@ The core pipeline is **classical ML** — PCA, UMAP, k-means, contrastive PCA, D
 ## Architecture
 
 ```
-Nodes (Slurm jobs, DCGM GPUs, InfiniBand, node_exporter)
-        │  OpenTelemetry
+Nodes (node_exporter, dcgm-exporter, ib_poller; slurm_poller central)
+        │  Prometheus scrape → OTel Collector; pollers → Kafka
         ▼
 telemetry-agent  ──────────►  ingest-infra
-(collector config,             (Redpanda → ClickHouse, OTel Collector,
- systemd units)                 Grafana, Redis, optional HA overlay)
+(systemd units,                (OTel Collector → Redpanda → ClickHouse sink,
+ DCGM counters file)            Grafana, Redis, optional HA overlay)
                                         │
                                         ▼
                                  tensor-store
@@ -48,8 +48,8 @@ Supporting package: `evaluation/` — cluster-quality benchmarks, fault injectio
 
 | Package | Phase | Purpose |
 |---|---|---|
-| `telemetry-agent/` | 1 | Node-side OTel collector config, systemd unit examples |
-| `ingest-infra/` | 1 | Docker Compose stack: Redpanda, ClickHouse, OTel Collector, Grafana, Redis; optional HA overlay |
+| `telemetry-agent/` | 1 | Node-side systemd unit examples (node_exporter, dcgm-exporter, ib_poller) and the DCGM counters file; the collector config itself lives in `ingest-infra/otel/` |
+| `ingest-infra/` | 1 | Docker Compose stack: Redpanda, ClickHouse, OTel Collectors (edge + sink), Grafana, Redis; the two custom pollers (`tools/`); optional HA overlay |
 | `tensor-store/` | 2 | Python library materializing the N×M×T tensor from ClickHouse |
 | `analysis-core/` | 3–4 | Pure-function analysis library (MulTiDR, k-means, ccPCA, mrDMD, baselines, z-scores) |
 | `analysis-api/` | 5 | FastAPI + Redis service exposing analysis-core/tensor-store over HTTP |

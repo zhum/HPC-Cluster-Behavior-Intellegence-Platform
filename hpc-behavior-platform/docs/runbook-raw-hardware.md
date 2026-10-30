@@ -15,18 +15,28 @@ for OCI-specific notes (RDMA path, NSGs, GPU-hour cost).
 | GPUs (optional) | NVIDIA, DCGM-capable | skip `dcgm-exporter` install if no GPUs |
 | `ingest_server` | 32 vCPU / 128 GB RAM / 2 TB NVMe | runs Redpanda, OTel Collector, analysis-api |
 | `storage_server` | 32 vCPU / 256 GB RAM / 8 TB NVMe | runs ClickHouse (+ Keeper if HA) |
-| Network | compute nodes ↔ ingest host reachable on 8123 (ClickHouse), 9092 (Redpanda), 6379/6380 (Redis), 4317/4318 (OTel gRPC/HTTP) | firewall/VLAN rules, not just routing — check both directions |
+| Network | compute nodes → ingest host: Redpanda external listeners (19092–19094, see below), plus 4317/4318 only if nodes push OTLP. Ingest host → compute nodes: 9100 (node_exporter), 9400 (dcgm-exporter). `slurm_poller` host → slurmctld:6820 | firewall/VLAN rules, not just routing. Keep ClickHouse (8123–8125, 9000–9002), Redis (6380) and MinIO **closed** to compute nodes — only the app tier needs them |
 | Root/sudo | on every compute node, for exporter install | systemd unit install needs root |
 | Slurm | `slurmrestd` reachable from wherever `slurm_poller.py` runs (can be the ingest host, polls centrally, not per-node) | `SLURMRESTD_TOKEN` — issue a read-scoped token, not admin |
 | NTP | `chrony` or equivalent running on every node | tensor builder aligns to 15s grid; sub-second skew tolerated, more breaks Phase 2. Verify, don't assume |
 | IB fabric (optional) | real InfiniBand, sysfs counters at `/sys/class/infiniband/*/ports/*/counters/*` | if RoCEv2 instead of true IB, path may differ — see test plan §1.3, treat as open item |
 
-Before starting either option below, confirm network reachability both ways:
+Before starting either option below, confirm network reachability in both
+directions (scrapes are pulled by the ingest host; pollers push to Redpanda):
 
 ```bash
-# from a compute node
-nc -zv <ingest-host> 8123 9092 6379 4317 4318
+# from a compute node: Redpanda external listeners (+ 4317/4318 if pushing OTLP)
+nc -zv <ingest-host> 19092 19093 19094
+# from the ingest host: exporters on each compute node
+nc -zv <compute-node> 9100 9400
 ```
+
+**Redpanda must advertise an address compute nodes can resolve.** As
+shipped, brokers advertise Docker-internal names (`redpanda:9092`,
+`redpanda-1:9092`, …); a client outside Docker connects, gets that name
+back, and fails. Add an external listener per broker before deploying any
+poller — see [INSTALL.md §2.4b](../../INSTALL.md#24-storage--broker-tier-ha-overlay).
+The commands below assume external listeners on 19092–19094.
 
 ---
 
@@ -52,21 +62,25 @@ to duplicate.
    service names (`node-exporter:9100`, `dcgm-exporter:9400`). One target
    entry per node, or a service-discovery block if the fleet is large.
    No new node-side agent required for CPU/mem/GPU metrics.
+   Use short hostnames as targets (see Option B step 4 — `node_id` must
+   match `ib_poller`'s hostname and Slurm's node names).
 
 3. **Deploy the two custom pollers fresh** (these are the *only* two
    collectors this platform owns — nothing else running on the cluster
    will produce this schema):
    - `ib_poller.py` — one instance per IB-equipped node. Install as systemd
      unit from `telemetry-agent/configs/ib_poller.service`, set `NODE_ID`
-     and `KAFKA_BROKERS=<ingest-host>:9092` per host.
+     and `KAFKA_BROKERS` (external Redpanda listeners, see §0) per host.
    - `slurm_poller.py` — one instance, centrally (not per-node). Set
      `SLURMRESTD_URL` and `SLURMRESTD_TOKEN` env vars, `KAFKA_BROKERS`
-     pointing at the ingest host.
+     pointing at the external Redpanda listeners.
+
+   Install both as in Option B steps 2–3 (systemd units, external
+   Redpanda listeners). Quick manual smoke test on one node:
 
    ```bash
-   # on the node/host running each poller
    pip install -r ingest-infra/tools/requirements.txt
-   NODE_ID=$(hostname) KAFKA_BROKERS=<ingest-host>:9092 \
+   NODE_ID=$(hostname) KAFKA_BROKERS=<ingest-host>:19092,<ingest-host>:19093,<ingest-host>:19094 \
      python3 ingest-infra/tools/ib_poller.py
    ```
 
@@ -77,18 +91,25 @@ to duplicate.
 
    ```bash
    cd hpc-behavior-platform/ingest-infra
-   docker compose -f docker-compose.ha.yml up -d
+   docker compose -p hbp -f docker-compose.ha.yml up -d
    ./ha/verify.sh
    ```
+
+   The overlay contains ClickHouse, Keeper, Redpanda, MinIO and the sink
+   collectors only — run Redis, the edge OTel Collector and (optionally)
+   Grafana alongside it, see [INSTALL.md §2.5](../../INSTALL.md#25-redis-and-otel-collector).
 
    Check for port collisions on the ingest host before starting — hit this
    in dev (6379 already bound, remapped Redis to 6380).
 
-5. **Normalize metric names.** Confirm the existing exporters' metric names
-   match `schema.sql`/tensor-store's expectations (`cpu.utilization` style).
-   If the existing deployment relabels differently, add an OTel Collector
-   processor on *this platform's* side to remap — don't touch the source
-   exporters' config, other consumers depend on it.
+5. **Check the metric mapping.** The edge collector config already maps
+   stock node_exporter / dcgm-exporter names to platform names
+   (`cpu.utilization` style) via `filter/allowlist` + `metricstransform` +
+   `experimental_metricsgeneration`. If the site's exporters run with
+   non-default flags or relabel names, extend that mapping on *this
+   platform's* side — don't touch the source exporters' config, other
+   consumers depend on it. Confirm with
+   `SELECT DISTINCT metric FROM metrics_raw` after the canary (step 6).
 
 6. **Canary first.** Point the collector at a small node subset, confirm
    `metrics_raw` populates and null-segment detection behaves, before
@@ -135,14 +156,17 @@ requires this platform's own collectors end to end.
 2. **Install `ib_poller.py` on every IB-equipped node:**
 
    ```bash
-   pip install -r ingest-infra/tools/requirements.txt
+   useradd --system --no-create-home --shell /usr/sbin/nologin telemetry
+   install -D -m 755 ingest-infra/tools/ib_poller.py /opt/hpc-behavior-platform/ib_poller.py
+   pip3 install -r ingest-infra/tools/requirements.txt   # kafka-python for /usr/bin/python3
    cp telemetry-agent/configs/ib_poller.service /etc/systemd/system/
-   # edit unit: set NODE_ID (defaults to %H/hostname), KAFKA_BROKERS=<ingest-host>:9092
-   systemctl enable --now ib_poller
+   # edit unit: Environment=KAFKA_BROKERS=<ingest-host>:19092,<ingest-host>:19093,<ingest-host>:19094
+   # (NODE_ID defaults to %H, the hostname -- must match the node_exporter scrape target name)
+   systemctl daemon-reload && systemctl enable --now ib_poller
    ```
 
-   Non-IB nodes: skip, or leave installed — it polls `/sys/class/infiniband`
-   and silently no-ops (logs, keeps polling) if the path is absent.
+   Non-IB nodes: skip, or leave installed — with no `/sys/class/infiniband`
+   it publishes nothing and logs nothing, just keeps polling.
 
 3. **Install `slurm_poller.py` once, centrally** (on the ingest host or a
    dedicated small VM — it polls `slurmrestd` every 30s, not per-node):
@@ -150,7 +174,7 @@ requires this platform's own collectors end to end.
    ```bash
    SLURMRESTD_URL=http://<slurm-ctld-host>:6820 \
    SLURMRESTD_TOKEN=<read-scoped-token> \
-   KAFKA_BROKERS=<ingest-host>:9092 \
+   KAFKA_BROKERS=<ingest-host>:19092,<ingest-host>:19093,<ingest-host>:19094 \
      python3 ingest-infra/tools/slurm_poller.py
    ```
 
@@ -159,13 +183,17 @@ requires this platform's own collectors end to end.
    `node-exporter:9100` / `dcgm-exporter:9400` static targets with one
    entry per real node (or a `file_sd_configs`/DNS service-discovery block
    for fleets beyond a few dozen nodes; static lists get unwieldy fast).
+   Use the nodes' **short hostnames** as targets: the collector derives
+   `node_id` from the target host, and it must match `ib_poller`'s
+   `NODE_ID` (hostname) and the names in Slurm's node lists — otherwise one
+   physical node shows up as several, and the job overlay finds no jobs.
 
 5. **Bring up the backend stack.** Same as Option A step 4 — HA overlay
    recommended for anything beyond first-pass validation:
 
    ```bash
    cd hpc-behavior-platform/ingest-infra
-   docker compose -f docker-compose.ha.yml up -d
+   docker compose -p hbp -f docker-compose.ha.yml up -d
    ./ha/verify.sh
    ```
 

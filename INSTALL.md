@@ -380,7 +380,7 @@ cp $HBP/ingest-infra/otel/otel-collector-config.yaml /opt/hbp/otel-collector-con
 
 - `exporters.kafka/otel_metrics.brokers`: `["redpanda:9092"]` → `["redpanda-1:9092","redpanda-2:9092","redpanda-3:9092"]`
 - `receivers.prometheus...static_configs.targets`: replace `node-exporter:9100` / `dcgm-exporter:9400` with your real nodes (`node001:9100`, …), or use `file_sd_configs` for large fleets.
-- Keep the `relabel_configs` (they set `node_id`, which the ClickHouse sink keys on) on any scrape job you add.
+- Keep the `relabel_configs` (they set `node_id`, which the ClickHouse sink keys on) on any scrape job you add. Use short hostnames as targets: `node_id` must match `ib_poller`'s `NODE_ID` (hostname) and the names in Slurm node lists, or one node appears as several and job overlays come up empty.
 - The config already curates node_exporter/DCGM output into all platform metric names (`filter/allowlist`, `cumulativetodelta`, `deltatorate`, `metricstransform`, `experimental_metricsgeneration`). Extend that mapping for anything else you need — do not change the exporters themselves if other consumers depend on them.
 - Size `memory_limiter.limit_mib` to the host.
 

@@ -25,6 +25,8 @@ None of this is a hidden bug — it's an explicit gap in the current implementat
 | `CLICKHOUSE_PORT` | `8123` | |
 | `CLICKHOUSE_PASSWORD` | `devpass` | **rotate before production** |
 
+Not configurable without a code change: the ClickHouse **user** is always `default` (`main.py` passes only host/port/password to `tensor_store.loader.get_client`), and there is no Redis password setting (`Redis(host, port)` only) — keep Redis on a private network.
+
 CLI tools (`analysis_core.inter.run`, `analysis_core.intra.run`, `alerting.run`) take the equivalent as flags: `--clickhouse-host/--clickhouse-port/--clickhouse-password`, same dev defaults baked in.
 
 ### Frontend
@@ -35,7 +37,11 @@ CLI tools (`analysis_core.inter.run`, `analysis_core.intra.run`, `alerting.run`)
 
 Canonical schema: `ingest-infra/clickhouse/schema.sql` — `metrics_raw`, `metrics_1m` rollup materialized view, `jobs`, `node_inventory`, `anomalies`, `suppression_rules`, `baseline_state`, `saved_analyses`.
 
-HA variant: `ingest-infra/ha/clickhouse/schema_ha.sql`, plus `storage.xml` (tiering policy), `cluster.xml`, per-node `macros.xml`.
+Sink (Redpanda → ClickHouse): `ingest-infra/clickhouse/sink.sql` — Kafka-engine tables `ib_metrics_queue` / `slurm_jobs_queue`, `Null`-engine OTel landing tables `otel_metrics_*`, MVs into `metrics_raw` / `jobs`, and `sink_errors` (unparseable messages, 7-day TTL). Design: [design-redpanda-clickhouse-sink.md](./design-redpanda-clickhouse-sink.md).
+
+HA variant: `ingest-infra/ha/clickhouse/schema_ha.sql` (same tables, `Replicated*` engines) and `sink_ha.sql`, plus `storage.xml` (tiering policy), `cluster.xml`, per-node `macros.xml`. Keep `schema.sql` and `schema_ha.sql` in sync by hand — nothing checks it.
+
+All schema files run only on an **empty** ClickHouse volume (`docker-entrypoint-initdb.d`). On an existing deployment apply new DDL manually on every replica; every statement is `CREATE ... IF NOT EXISTS`, so re-running a whole file is safe.
 
 ## Deployment worker constraint
 
@@ -98,3 +104,17 @@ Phase 8 evaluated an InfoNCE-based deep contrastive embedding as an alternative 
 ## Monitoring the platform itself
 
 Grafana (bundled in `ingest-infra`) is for *cluster telemetry* dashboards, not platform observability — there's no APM/tracing setup for `analysis-api`/`alerting` themselves in this repo. If you need to know whether the platform is healthy, use ClickHouse's `system.parts`/`system.replicas` (HA) and the `alerting`/`analysis-api` process logs directly; nothing is currently wired into Grafana for that purpose.
+
+Ingestion health (the sink):
+
+```sql
+SELECT max(ts) FROM metrics_raw;                       -- freshness: should trail now() by < 2 scrape intervals
+SELECT topic, count(), any(error) FROM sink_errors WHERE at > now() - 3600 GROUP BY topic;
+SELECT table, num_messages_read, last_poll_time, exceptions.text FROM system.kafka_consumers;
+```
+
+```bash
+rpk group describe hbp-clickhouse-sink    # otel.metrics lag (also -ib, -slurm)
+```
+
+Alert on growing consumer lag, non-empty `sink_errors`, or stale `max(ts)`.

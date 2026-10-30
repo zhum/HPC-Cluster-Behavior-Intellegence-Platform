@@ -4,7 +4,7 @@ Standalone overlay -- does not touch the base `docker-compose.yml` dev
 stack every earlier phase depends on. Run with:
 
 ```
-docker compose -f docker-compose.ha.yml up -d
+docker compose -p hbp -f docker-compose.ha.yml up -d
 ```
 
 ## What's in it

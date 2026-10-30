@@ -1,18 +1,20 @@
 # Deployment Options
 
+This page compares the options. Step-by-step instructions (local Docker test and production, incl. systemd units, reverse proxy, firewall): [`INSTALL.md`](../../INSTALL.md).
+
 ## 1. Dev single-node stack
 
-`ingest-infra/docker-compose.yml` — single-broker Redpanda, single-node ClickHouse, OTel Collector, Grafana (anonymous admin), Redis, optional `synth-loader` profile. This is the baseline every other environment builds on. See [Quick Start](./quick-start.md).
+`ingest-infra/docker-compose.yml` — single-broker Redpanda, single-node ClickHouse, edge OTel Collector, `otel-sink` (Redpanda → ClickHouse), a local `node-exporter` scrape target, Grafana (anonymous admin), Redis, optional `synth-loader` profile. This is the baseline every other environment builds on. See [Quick Start](./quick-start.md).
 
 Not suitable for production: no replication, anonymous Grafana admin, plaintext dev credentials (`devpass`), TTL-based deletion only (no cold tier).
 
 ## 2. HA overlay
 
-`ingest-infra/docker-compose.ha.yml` — standalone, opt-in overlay. Deliberately **not** merged into the dev compose file: separate network, volumes, service names, and ports (ClickHouse on 8124/8125, Redpanda on 9093) to avoid collisions if you run both side by side.
+`ingest-infra/docker-compose.ha.yml` — standalone, opt-in overlay. Deliberately **not** merged into the dev compose file: separate volumes, service names, and ports (ClickHouse on 8124/8125, Redpanda on 9093). Both files live in `ingest-infra/`, so without `-p` they share the default Compose project name (`ingest-infra`) and network and warn about each other's containers as orphans — always start the overlay with its own project name.
 
 ```bash
 cd hpc-behavior-platform/ingest-infra
-docker compose -f docker-compose.ha.yml up -d
+docker compose -p hbp -f docker-compose.ha.yml up -d
 ./ha/verify.sh   # checks replication, Redpanda health/RF, tiering — ~40s
 ```
 
@@ -22,6 +24,9 @@ Contains:
 - 2 ClickHouse replicas (`ReplicatedMergeTree` / `ReplicatedReplacingMergeTree` / `ReplicatedAggregatingMergeTree` — schema in `ingest-infra/ha/clickhouse/schema_ha.sql`)
 - 3-broker Redpanda cluster, topics at replication factor 3
 - MinIO S3-compatible cold tier — ClickHouse storage policy (`ingest-infra/ha/clickhouse/common/storage.xml`) moves `metrics_raw` parts older than 45 days to `s3_cold` instead of deleting them
+- Redpanda → ClickHouse sink: Kafka-engine tables + MVs on both replicas (`ingest-infra/ha/clickhouse/sink_ha.sql`) and one `otel-sink` collector per replica
+
+**Not included:** Redis (required by `analysis-api`), the edge OTel Collector, Grafana. Run them alongside the overlay — see `INSTALL.md` §2.5.
 
 ### Known rough edges (documented in `ingest-infra/ha/README.md`)
 
@@ -75,6 +80,6 @@ Called out again in the OCI test plan §2.6.
 |---|---|
 | Local dev, demo, laptop | Dev single-node stack |
 | Staging, want to validate replication/failover behavior | HA overlay |
-| Production against real HPC/OCI hardware | HA overlay + hardware test plan checklist, single-worker analysis-api |
+| Production against real HPC/OCI hardware | HA overlay + Redis + edge OTel Collector (not in the overlay) + hardware test plan checklist, single-worker analysis-api — see `INSTALL.md` Part 2 |
 
 None of these ship an auth layer. See [Admin Guide § Security posture](./admin-guide.md#security-posture) before exposing any of this beyond a trusted network.

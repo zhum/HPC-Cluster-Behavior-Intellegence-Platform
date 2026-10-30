@@ -13,7 +13,7 @@ The four views map directly onto this: Node Similarity answers (1); Time Domain,
 
 ## Starting a session
 
-Opening the UI creates a session against a time range and resolution. The session materializes the analysis tensor (nodes × metrics × time) from ClickHouse in the background and warms the first dimensionality-reduction stage. Larger time ranges / more nodes take longer to materialize — the UI shows session status while this happens.
+Create a session with the **start / end / resolution** fields at the top of the UI (times in UTC), then the create button. The defaults — the last 30 seconds at 1 s resolution — are only good for a smoke test; for real analysis pick a window of at least tens of minutes and a resolution at or above the scrape interval (15 s in the shipped config). The session materializes the analysis tensor (nodes × metrics × time) from ClickHouse in the background and warms the first dimensionality-reduction stage. Larger time ranges / more nodes take longer to materialize — the UI shows session status while this happens.
 
 Session limits are enforced server-side: **N ≤ 2000 nodes, M ≤ 500 metrics, T ≤ 10000 timesteps.** A request outside these bounds is rejected (HTTP 422) rather than silently degrading — if your query gets rejected, narrow the time range, metric selection, or node scope.
 
@@ -29,7 +29,7 @@ Cluster explanations use contrastive PCA (ccPCA): for a selected cluster, it sur
 
 ### Time Domain
 
-Shows the raw or aggregated time series for the currently selected cluster/nodes, with job overlays (Slurm job start/end boundaries) so you can correlate behavior changes with job scheduling.
+Shows the raw or aggregated time series for the currently selected cluster/nodes.
 
 ### Metric Reading
 
@@ -37,7 +37,7 @@ Three-part view for drilling into individual metrics within the selected cluster
 
 - **Metric selection** — choose which metric(s) to inspect.
 - **Cluster reading summary** — aggregate statistics for the metric across the cluster.
-- **Reading inspection** — per-node detail for the chosen metric.
+- **Reading inspection** — per-node detail for the chosen metric, with an optional **job overlay** (Slurm job start/end intervals per node) so you can correlate behavior changes with job scheduling. Nodes with no job on record are listed as "not mapped to any jobs". (The overlay query isn't limited to the session's time window — it returns every recorded job on the selected nodes.)
 
 ### Node Behavior
 

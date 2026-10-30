@@ -22,6 +22,19 @@ pytest
 
 Do this per package you're touching (`analysis-core`, `analysis-api`, `tensor-store`, `evaluation`, `alerting`).
 
+Cross-package imports are **not** declared in the `pyproject.toml` files, so install the dependencies into the same environment first or imports fail (`ModuleNotFoundError: No module named 'tensor_store'`):
+
+| Package | Also needs (install first, editable) |
+|---|---|
+| `analysis-api`, `alerting` | `tensor-store`, `analysis-core` |
+| `evaluation` | `analysis-core` |
+| `analysis-core` (only its `inter.run` / `intra.run` CLIs) | `tensor-store` |
+
+```bash
+cd hpc-behavior-platform
+pip install -e tensor-store -e analysis-core -e "analysis-api[dev]"
+```
+
 Frontend:
 
 ```bash
@@ -43,6 +56,7 @@ Every Python package has its own `tests/`, run with `pytest` inside that package
 | `tensor-store` | `tests/` | `test_api`, `test_cache`, `test_grid`, `test_normalize`, `test_nulls`, `test_tensor`; `hypothesis` for grid-alignment properties |
 | `evaluation` | `tests/` | `test_dr_ablation`, `test_fault_injection`, `test_ground_truth`, `test_quality_benchmark`, `test_research_contrastive` |
 | `alerting` | `tests/` | `test_baseline_state`, `test_scheduler`, `test_store`, `test_webhook` |
+| `ingest-infra/tools` | `test_pollers.py` | Pure-function tests for `ib_poller` (rates, counter resets) and `slurm_poller` (hostlist expansion, v0.0.40 number unwrapping, pending-job skip). `pip install -r requirements.txt pytest`, then `pytest test_pollers.py`. (`test_null_segments.py` alongside it is a live-stack script, not a pytest module.) |
 | `behavior-ui` | `e2e/` | Playwright: `acceptance.spec.ts`, `saved-analyses.spec.ts`; config `playwright.config.ts`, baseURL `http://localhost:5173`, 60s timeout, trace-on-failure |
 
 Run e2e tests against a live dev stack + running frontend:
@@ -88,7 +102,7 @@ Four view components: `TimeDomainView`, `NodeSimilarityView`, `MetricSelectionPa
 
 ## Working on `analysis-core`
 
-Pure-function library — no I/O, no framework dependencies. This is the package with `mypy --strict` most strictly enforced; keep new code typed accordingly. If you're touching `zscores.py`, note there's an accepted-but-not-yet-adopted plan to parallelize `compute_zscores` across metrics (`docs/plan-zscore-parallelization.md`) — deferred until there's benchmark evidence it's worth the process-pool overhead. Don't implement it speculatively.
+Pure-function library — no I/O, no framework dependencies — except the `inter/run.py` / `intra/run.py` CLIs, which load data from ClickHouse through `tensor_store`. This is the package with `mypy --strict` most strictly enforced; keep new code typed accordingly. If you're touching `zscores.py`, note there's an accepted-but-not-yet-adopted plan to parallelize `compute_zscores` across metrics (`docs/plan-zscore-parallelization.md`) — deferred until there's benchmark evidence it's worth the process-pool overhead. Don't implement it speculatively.
 
 ## Legacy/historical files — don't build on these
 

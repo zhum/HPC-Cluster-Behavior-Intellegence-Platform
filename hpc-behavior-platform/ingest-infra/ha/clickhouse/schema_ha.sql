@@ -93,3 +93,79 @@ CREATE TABLE IF NOT EXISTS node_inventory
 )
 ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/node_inventory', '{replica}', updated_at)
 ORDER BY node_id;
+
+-- Phase 8 items 3-4 tables, replicated (keep in sync with clickhouse/schema.sql).
+-- Phase 8 item 4 (alerting, optional/beyond the paper): scheduled headless
+-- intra-pipeline runs push |z| >= threshold events here.
+CREATE TABLE IF NOT EXISTS anomalies
+(
+    id                     String,
+    detected_at            DateTime64(3),
+    cluster_id             Int32,
+    node_id                LowCardinality(String),
+    metric                 LowCardinality(String),
+    band                   LowCardinality(String),
+    z_score                Float64,
+    baseline_window_start  UInt32,
+    baseline_window_end    UInt32,
+    status                 LowCardinality(String) DEFAULT 'open',  -- 'open' | 'dismissed'
+    dismissed_at           Nullable(DateTime64(3)),
+    dismissed_by           Nullable(String),
+    dismiss_reason         Nullable(String)
+)
+ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/anomalies', '{replica}')
+ORDER BY (detected_at, id);
+
+-- Operator "dismiss -> suppress" feedback: a (node_id, metric, band) that
+-- has been dismissed as a false positive is suppressed from future alerts.
+CREATE TABLE IF NOT EXISTS suppression_rules
+(
+    id         String,
+    node_id    LowCardinality(String),
+    metric     LowCardinality(String),
+    band       LowCardinality(String),
+    created_at DateTime64(3),
+    created_by Nullable(String),
+    reason     Nullable(String)
+)
+ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/suppression_rules', '{replica}')
+ORDER BY (node_id, metric, band, created_at);
+
+-- Last-known-good baseline window per (cluster, metric), so the scheduler
+-- doesn't recompute (and potentially drift) the baseline from a run that
+-- itself contains an ongoing anomaly -- only updated after a clean run.
+CREATE TABLE IF NOT EXISTS baseline_state
+(
+    cluster_id   Int32,
+    metric       LowCardinality(String),
+    window_start UInt32,
+    window_end   UInt32,
+    updated_at   DateTime64(3)
+)
+ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/baseline_state', '{replica}')
+ORDER BY (cluster_id, metric);
+
+-- Phase 8 item 3 (multi-user sessions, optional/beyond the paper): saved
+-- analyses persisted per user (baselines, lassoNodeIds, selectedMetrics,
+-- band, k, umapParams, annotations -- the full cross-view UI state from
+-- behavior-ui's Zustand store, opaque JSON here since analysis-api doesn't
+-- need to interpret it, only store/retrieve it per owning user).
+-- `deleted` is a soft-delete flag rather than a real DELETE: ClickHouse's
+-- ALTER TABLE ... DELETE is an async mutation with no guaranteed immediate
+-- visibility to a subsequent SELECT (confirmed live -- a delete followed
+-- immediately by a list refresh still showed the "deleted" row). Deleting
+-- is instead just another insert of a newer version with deleted=1,
+-- riding the same ReplacingMergeTree + FINAL read pattern already used for
+-- updates, which -is- synchronously visible.
+CREATE TABLE IF NOT EXISTS saved_analyses
+(
+    id         String,
+    user_id    LowCardinality(String),
+    name       String,
+    state_json String,
+    deleted    UInt8 DEFAULT 0,
+    created_at DateTime64(3),
+    updated_at DateTime64(3)
+)
+ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/saved_analyses', '{replica}', updated_at)
+ORDER BY (user_id, id);

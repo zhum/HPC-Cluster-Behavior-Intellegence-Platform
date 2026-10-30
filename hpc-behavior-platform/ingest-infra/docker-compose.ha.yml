@@ -1,7 +1,8 @@
 # Phase 8 item 2 (optional, beyond the paper): HA infra + retention tiering.
 #
 # Standalone overlay -- run with:
-#   docker compose -f docker-compose.ha.yml up -d
+#   docker compose -p hbp -f docker-compose.ha.yml up -d   (own project name: both compose
+#   files live in this directory and would otherwise share project "ingest-infra")
 # Deliberately NOT merged into docker-compose.yml: that file is the simple
 # single-node dev stack every earlier phase's testing depends on, and this
 # is a separate, opt-in scale-out topology (own network/volumes/service
