@@ -45,7 +45,7 @@ Runs mrDMD (multiresolution Dynamic Mode Decomposition) frequency-band analysis 
 
 This is where you'd spot, e.g., a node with a slow memory-leak-shaped drift or a burst of InfiniBand errors relative to its cluster peers — though see the note below on DMD's blind spots.
 
-**Known limitation:** DMD models oscillatory/exponential dynamics well. It's a poor fit for monotonic ramps (e.g., a slow memory leak) and struggles with anomalies shorter than the mrDMD window size (e.g., brief IB error bursts). If Node Behavior looks "clean" for a node you suspect is degrading, check Time Domain / Metric Reading directly rather than trusting the absence of a z-score flag — see `evaluation/reports/fault_injection.md` for the measured recall gaps.
+**Known limitation:** DMD models oscillatory/exponential dynamics well. It's a poor fit for monotonic ramps (e.g., a slow memory leak) and struggles with anomalies shorter than the mrDMD window size (e.g., brief IB error bursts) -- tuned to catch those, it also flags healthy nodes. If Node Behavior looks "clean" for a node you suspect is degrading, check Time Domain / Metric Reading directly rather than trusting the absence of a z-score flag — see `evaluation/reports/fault_injection.md` for the measured recall and false-positive gaps.
 
 ## Saved analyses
 

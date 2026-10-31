@@ -71,7 +71,7 @@ npx playwright test
 ### Quality gates (hard requirements, checked by tests)
 
 - **Phase 3 (inter-node clustering)**: ships only if planted-cluster ARI > 0.9 and beats a PCA-only baseline. Achieved: MulTiDR ARI 1.000 vs PCA-only 0.716.
-- **Phase 4 (intra-node anomaly detection)**: ships only if injected anomalies are recovered at recall ≥ 0.9 for `|z| ≥ 3`. Met for `dead_node` and `cpu_steal`. **Not met** for `memory_leak_ramp` (a monotonic ramp is a poor fit for DMD, which models oscillatory/exponential dynamics) or `ib_error_burst` (a short impulse relative to mrDMD window sizes). These are real, documented limitations of DMD, not bugs — see `evaluation/reports/fault_injection.md`.
+- **Phase 4 (intra-node anomaly detection)**: ships only if injected anomalies are recovered at recall ≥ 0.9 for `|z| ≥ 3` with at most 10% of healthy nodes flagged, on every seed 0–9. Met for `cpu_steal`, `memory_leak_ramp` and `dead_node`. **Not met** for `ib_error_burst`: the short impulse is only visible through noise-level DMD modes, which spill it across nodes, so recall drops on some seeds and healthy nodes are flagged on others. The gate test marks it as a strict xfail — see `evaluation/README.md` and `evaluation/reports/fault_injection.md`.
 
 ## Regenerating evaluation reports
 

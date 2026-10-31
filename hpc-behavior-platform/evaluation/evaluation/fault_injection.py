@@ -1,10 +1,12 @@
 """Fault-injection tests (Phase 7 item 2): scripted perturbations on
 synthetic nodes -> assert the injected nodes surface in the top-decile |z|
 for the right metrics/bands. Also restates the Phase 4 shipping gate
-(recall >= 0.9 at |z| >= 3) as a directly checkable function here.
+(recall >= 0.9 at |z| >= 3) as a directly checkable function here, checked
+across GATE_SEEDS together with a false-positive bound.
 """
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Callable, NamedTuple
 
 import numpy as np
@@ -13,6 +15,12 @@ from analysis_core.intra.zscores import compute_zscores
 
 # a node must exceed this magnitude to count as "flagged" -- the Phase 4 gate.
 Z_THRESHOLD = 3.0
+GATE_RECALL = 0.9
+# Recall alone is satisfied by flagging every node, so the gate also bounds
+# the fraction of healthy nodes flagged. Checked on every seed in GATE_SEEDS:
+# single-seed results hid both missed faults and false positives.
+MAX_FALSE_POSITIVE_RATE = 0.1
+GATE_SEEDS = range(10)
 
 
 def _phase_diverse_baseline(n_nodes: int, T: int, period_samples: float, seed: int = 0) -> np.ndarray:
@@ -79,18 +87,22 @@ FAULTS: dict[str, Callable[[np.ndarray, list[int]], np.ndarray]] = {
     "dead_node": lambda S, affected: inject_dead_node(S, affected, start=S.shape[1] // 2),
 }
 
-# Per-fault detection settings, empirically characterized (recall 1.00 across
-# seeds 0-4 on the default fixture for every entry):
+# Per-fault detection settings (see reports/fault_injection.md for how they
+# hold up across GATE_SEEDS):
 #
+# - cpu_steal is a 4-sample-period burst, so it belongs in the "5m" band,
+#   which default max_cycles=1 leaves structurally empty (nothing faster than
+#   1 cycle per finest window is retained); max_cycles=16 reaches it. Over
+#   seeds 0-19: affected |z| >= 32, healthy |z| <= 2.7.
 # - memory_leak_ramp lives in the "2h" band, not "7d": mrDMD's level windows
 #   cap the slowest resolvable period, so on an 8h fixture (T=480 @ 60s) the
 #   24h/7d bands only ever see exact-DC modes and the ramp's per-window
 #   signature lands in "2h" (z ~ 400+ for injected nodes, defaults suffice).
-# - ib_error_burst is a 2-sample impulse: with default max_cycles=1 no mode
-#   faster than 1 cycle per finest window is retained, so the "5m"/"30m"
-#   bands are structurally empty. Finer windows (16) plus a higher frequency
-#   cutoff (max_cycles=8) make the impulse dominate its window in the "5m"
-#   band.
+# - ib_error_burst is a 2-sample impulse. Finer windows (16) plus
+#   max_cycles=8 put it in the "5m" band, but only through noise-level DMD
+#   modes, which span all nodes and spill the burst onto healthy ones. No
+#   band/max_cycles/window or SVD truncation setting gives both full recall
+#   and no healthy flags -- a known limitation, not a tuning gap.
 class FaultDetection(NamedTuple):
     band: str
     max_cycles: int
@@ -98,7 +110,7 @@ class FaultDetection(NamedTuple):
 
 
 FAULT_DETECTION: dict[str, FaultDetection] = {
-    "cpu_steal": FaultDetection(band="2h", max_cycles=1, min_finest_window=32),
+    "cpu_steal": FaultDetection(band="5m", max_cycles=16, min_finest_window=32),
     "memory_leak_ramp": FaultDetection(band="2h", max_cycles=1, min_finest_window=32),
     "ib_error_burst": FaultDetection(band="5m", max_cycles=8, min_finest_window=16),
     "dead_node": FaultDetection(band="2h", max_cycles=1, min_finest_window=32),
@@ -142,5 +154,58 @@ def run_fault_case(
     z = result.z[:, 0]
     flagged = {i for i in range(n_nodes) if abs(z[i]) >= Z_THRESHOLD}
     recall = len(flagged & set(affected)) / len(affected)
+    false_positive_rate = len(flagged - set(affected)) / (n_nodes - n_affected)
 
-    return {"fault": fault_name, "band": band, "z": z, "affected": affected, "flagged": flagged, "recall_at_3": recall}
+    return {
+        "fault": fault_name,
+        "band": band,
+        "z": z,
+        "affected": affected,
+        "flagged": flagged,
+        "recall_at_3": recall,
+        "false_positive_rate": false_positive_rate,
+    }
+
+
+def gate_over_seeds(fault_name: str) -> dict[str, object]:
+    """Phase 4 gate for one fault with its FAULT_DETECTION settings: recall
+    >= GATE_RECALL and false-positive rate <= MAX_FALSE_POSITIVE_RATE on
+    every seed in GATE_SEEDS (worst case reported)."""
+    cfg = FAULT_DETECTION[fault_name]
+    results = [
+        run_fault_case(
+            fault_name, band=cfg.band, max_cycles=cfg.max_cycles, min_finest_window=cfg.min_finest_window, seed=seed
+        )
+        for seed in GATE_SEEDS
+    ]
+    min_recall = min(r["recall_at_3"] for r in results)
+    max_fp_rate = max(r["false_positive_rate"] for r in results)
+    return {
+        "fault": fault_name,
+        "min_recall": min_recall,
+        "max_false_positive_rate": max_fp_rate,
+        "passed": min_recall >= GATE_RECALL and max_fp_rate <= MAX_FALSE_POSITIVE_RATE,
+    }
+
+
+def write_markdown_report(path: Path) -> None:
+    seeds = f"{GATE_SEEDS.start}-{GATE_SEEDS.stop - 1}"
+    lines = [
+        "# Fault Injection Report",
+        "",
+        f"Phase 4/7 gate: on every seed {seeds}, recall >= {GATE_RECALL} at |z| >= {Z_THRESHOLD:g} "
+        f"and at most {MAX_FALSE_POSITIVE_RATE:.0%} of healthy nodes flagged. Columns show the worst "
+        "seed. Per-fault detection settings (band, max_cycles, min_finest_window) are in "
+        "evaluation/fault_injection.py FAULT_DETECTION.",
+        "",
+        "| fault | band | max_cycles | min_finest_window | min recall | max false-positive rate | gate |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    for fault in FAULTS:
+        cfg = FAULT_DETECTION[fault]
+        g = gate_over_seeds(fault)
+        lines.append(
+            f"| {fault} | {cfg.band} | {cfg.max_cycles} | {cfg.min_finest_window} "
+            f"| {g['min_recall']:.2f} | {g['max_false_positive_rate']:.2f} | {'PASS' if g['passed'] else 'FAIL'} |"
+        )
+    path.write_text("\n".join(lines) + "\n")

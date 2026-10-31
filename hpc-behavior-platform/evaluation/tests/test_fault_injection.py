@@ -1,8 +1,15 @@
-"""Phase 4/7 gate: injected anomalies recovered with recall >= 0.9 at |z| >= 3.
+"""Phase 4/7 gate: injected anomalies recovered with recall >= 0.9 at |z| >= 3,
+with at most MAX_FALSE_POSITIVE_RATE of healthy nodes flagged, on every seed in
+GATE_SEEDS.
 
-All four fault types now clear the gate with per-fault detection settings
-(FAULT_DETECTION in evaluation/fault_injection.py), each verified for recall
-1.00 across seeds 0-4:
+ib_error_burst does not meet it (see reports/fault_injection.md): a 2-sample
+impulse only reaches the "5m" band through noise-level DMD modes, which spill
+the burst across nodes, so recall drops on some seeds and healthy nodes are
+flagged on others. It is a strict xfail, so a fix shows up as an unexpected
+pass.
+
+On seed 0 the per-fault settings recover every fault, which the recall
+test below keeps as a detection regression check:
 
 - memory_leak_ramp: previously a documented gap in the "7d" band. The 7d band
   was the wrong place to look on this fixture -- 8h of data (T=480 @ 60s)
@@ -10,21 +17,35 @@ All four fault types now clear the gate with per-fault detection settings
   retained frequency, so the 24h/7d bands only ever contain exact-DC modes
   (zero baseline variance => degenerate). The ramp's per-window signature
   lands in the "2h" band, where default settings recover it at z ~ 400+.
-- ib_error_burst: previously a documented gap. A 2-sample impulse needs
-  high-frequency modes that default max_cycles=1 structurally discards
-  (nothing faster than 1 cycle per finest window is ever retained, leaving
-  the "5m"/"30m" bands empty). With finer windows (min_finest_window=16) and
-  max_cycles=8 the impulse dominates its window in the "5m" band.
+- cpu_steal and ib_error_burst need high-frequency modes that default
+  max_cycles=1 structurally discards (nothing faster than 1 cycle per finest
+  window is ever retained, leaving the "5m"/"30m" bands empty); both read
+  from "5m" with a higher max_cycles.
 """
 from __future__ import annotations
 
 import pytest
 
-from evaluation.fault_injection import FAULT_DETECTION, FAULTS, Z_THRESHOLD, run_fault_case
+from evaluation.fault_injection import FAULT_DETECTION, FAULTS, Z_THRESHOLD, gate_over_seeds, run_fault_case
+
+GATE_FAILURES = {"ib_error_burst"}
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        pytest.param(f, marks=pytest.mark.xfail(strict=True, reason="known gate failure, see module docstring"))
+        if f in GATE_FAILURES
+        else f
+        for f in sorted(FAULTS)
+    ],
+)
+def test_fault_meets_gate_across_seeds(fault: str):
+    assert gate_over_seeds(fault)["passed"]
 
 
 @pytest.mark.parametrize("fault", sorted(FAULTS))
-def test_fault_meets_recall_gate(fault: str):
+def test_fault_recall_on_seed_0(fault: str):
     cfg = FAULT_DETECTION[fault]
     result = run_fault_case(
         fault, band=cfg.band, max_cycles=cfg.max_cycles, min_finest_window=cfg.min_finest_window
