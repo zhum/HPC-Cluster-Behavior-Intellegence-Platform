@@ -69,3 +69,18 @@ def test_zresult_metrics_and_shape_multi_metric():
     result = compute_zscores({"metric_a": S1, "metric_b": S2}, band="2h", resolution_s=60)
     assert result.metrics == ["metric_a", "metric_b"]
     assert result.z.shape == (S1.shape[0], 2)
+
+
+def test_zscores_calibrated_on_homogeneous_no_fault_series():
+    """Near-identical nodes, no fault: cross-node std(a_B) is tiny, so the
+    window amplitude noise shared by all nodes used to shift every node to
+    |z| ~ 4 on this seed. The common-mode term in the scale absorbs it.
+    """
+    rng = np.random.default_rng(7)
+    N, T = 20, 480
+    t = np.arange(T)
+    phases = rng.uniform(0, 2 * np.pi, N)
+    S = np.array([np.sin(2 * np.pi * t / 70 + phases[i]) + rng.normal(0, 0.05, T) for i in range(N)])
+
+    result = compute_zscores({"metric_x": S}, band="2h", resolution_s=60, baseline_windows={"metric_x": (0, 240)})
+    assert np.abs(result.z).max() < 3.0

@@ -8,7 +8,14 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from analysis_core.intra.baseline import default_baseline, user_baseline
-from analysis_core.intra.mrdmd import MIN_FINEST_WINDOW, Mode, isolate_band, mrdmd_spectrum, named_bands
+from analysis_core.intra.mrdmd import (
+    MIN_FINEST_WINDOW,
+    Mode,
+    compute_max_level,
+    isolate_band,
+    mrdmd_spectrum,
+    named_bands,
+)
 
 
 @dataclass
@@ -29,6 +36,31 @@ def _band_amplitude(n_nodes: int, modes: list[Mode], f_low: float, f_high: float
     if not retained:
         return np.zeros(n_nodes)
     return np.sum([mode.amplitude for mode in retained], axis=0)
+
+
+def _common_mode_var(modes: list[Mode], f_low: float, f_high: float, max_level: int) -> float:
+    """Variance of the band amplitude shared by all nodes.
+
+    A node's amplitude in one mrDMD window is |mode_i| * |b|, and |b| is
+    common to every node, so window-to-window estimation noise in |b| shifts
+    all nodes together. Cross-node std(a_B) never sees it: on near-identical
+    nodes it is a fraction of that noise, and a no-fault series reads |z| ~ 3
+    on every node. Per level, estimate the noise as the variance of the
+    per-window node-mean amplitude across the baseline's windows (no band
+    modes = 0); a node total sums 2**level windows of each level.
+    """
+    window_means: dict[int, dict[tuple[float, float], float]] = {}
+    for mode in isolate_band(modes, f_low, f_high):
+        level = window_means.setdefault(mode.level, {})
+        level[mode.window] = level.get(mode.window, 0.0) + float(mode.amplitude.mean())
+
+    total = 0.0
+    for level in range(1, max_level + 1):  # level 0 is a single window: no spread to measure
+        n_windows = 2**level
+        means = list(window_means.get(level, {}).values())
+        means += [0.0] * (n_windows - len(means))
+        total += n_windows * float(np.var(means, ddof=1))
+    return total
 
 
 def compute_zscores(
@@ -83,7 +115,10 @@ def compute_zscores(
             z[:, m_i] = 0.0
             degenerate.append(metric)
         else:
-            z[:, m_i] = (a_S - a_B.mean()) / std_B
+            max_level = compute_max_level(B.shape[1], min_finest_window)
+            # a_S and a_B each carry the common-mode noise: their difference twice
+            common_var = _common_mode_var(modes_B, f_low, f_high, max_level)
+            z[:, m_i] = (a_S - a_B.mean()) / np.sqrt(std_B**2 + 2 * common_var)
 
     return ZResult(
         z=z,
